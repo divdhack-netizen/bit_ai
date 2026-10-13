@@ -1,0 +1,12 @@
+{
+  "_nota": "allow e deny regolano le scritture (write/replace/mkdir). La sola deny vale anche per le letture e gli elenchi (read/list/tree/find/cerca): i path negati sono illeggibili e invisibili, e negare una cartella copre il suo contenuto. allow non amplia le letture: è un perimetro di scrittura. Questa chiave _nota è ignorata dal loader.",
+  "allow": [],
+  "deny": [
+    ".env",
+    ".env.*",
+    "**/.env",
+    "**/.env.*",
+    "**/credentials.json",
+    "**/secrets.*"
+  ]
+}
