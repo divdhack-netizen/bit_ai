@@ -1,4 +1,4 @@
-"""Test CLI dry-run, rubrica qualità e confronto del benchmark di inferenza."""
+"""Tests for the inference benchmark: CLI dry run, quality rubric and comparison."""
 
 from __future__ import annotations
 
@@ -7,29 +7,29 @@ from pathlib import Path
 
 import pytest
 
-from assistente.inference_profiles import GIBIBYTE
+from assistant.inference_profiles import GIBIBYTE
 from benchmarks.benchmark_inference import (
     _CASES,
     _quality_pass,
     _should_skip_variant,
-    aggrega_gruppi,
+    aggregate_groups,
     main,
-    valuta_qualita,
+    evaluate_quality,
 )
-from benchmarks.compare_benchmarks import confronta
+from benchmarks.compare_benchmarks import compare
 from benchmarks.compare_benchmarks import main as compare_main
 
 pytestmark = pytest.mark.unit
 
 
-def test_quality_pass_richiede_tutti_i_frammenti() -> None:
-    """Il controllo funzionale è case-insensitive e congiuntivo."""
+def test_quality_pass_requires_all_fragments() -> None:
+    """The functional check is case-insensitive and conjunctive."""
     assert _quality_pass("Def Clamp(value)", ["def clamp"]) is True
     assert _quality_pass("hello", ["def clamp"]) is False
 
 
-def test_should_skip_fast_su_memoria_insufficiente() -> None:
-    """fast viene saltato se pesi+headroom non entrano."""
+def test_should_skip_fast_on_insufficient_memory() -> None:
+    """fast is skipped if weights plus headroom do not fit."""
     reason = _should_skip_variant(
         "fast",
         total_memory_bytes=8 * GIBIBYTE,
@@ -39,7 +39,7 @@ def test_should_skip_fast_su_memoria_insufficiente() -> None:
 
 
 def test_main_list_cases(capsys: pytest.CaptureFixture[str]) -> None:
-    """--list-cases elenca i casi fissi senza toccare Ollama."""
+    """--list-cases lists the fixed cases without touching Ollama."""
     assert main(["--list-cases"]) == 0
     out = capsys.readouterr().out
     assert "chat:" in out
@@ -51,7 +51,7 @@ def test_main_list_cases(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 def test_main_dry_run_json(capsys: pytest.CaptureFixture[str]) -> None:
-    """--dry-run mostra la matrice pianificata in JSON."""
+    """--dry-run prints the planned matrix as JSON."""
     assert main(["--dry-run", "--alias", "default", "--case", "chat", "--repeat", "2"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["planned"]
@@ -60,51 +60,51 @@ def test_main_dry_run_json(capsys: pytest.CaptureFixture[str]) -> None:
     assert payload["planned"][0]["repeat"] == 2
 
 
-def test_rubrica_coding_esegue_il_codice(tmp_path: Path) -> None:
-    """Il check funzionale esegue il codice generato in un interprete separato."""
-    corretto = (
+def test_coding_rubric_runs_code(tmp_path: Path) -> None:
+    """The functional check runs the generated code in a separate interpreter."""
+    correct = (
         "```python\n"
         "def clamp(value, low, high):\n"
         '    """Limita value in [low, high]."""\n'
         "    return max(low, min(high, value))\n"
         "```"
     )
-    sbagliato = "def clamp(value, low, high):\n    return value\n"
-    assert valuta_qualita(_CASES["coding"], corretto, workspace=tmp_path).passed
-    esito = valuta_qualita(_CASES["coding"], sbagliato, workspace=tmp_path)
-    assert not esito.passed
-    assert any(f.startswith("codice:") for f in esito.failures)
+    wrong = "def clamp(value, low, high):\n    return value\n"
+    assert evaluate_quality(_CASES["coding"], correct, workspace=tmp_path).passed
+    outcome = evaluate_quality(_CASES["coding"], wrong, workspace=tmp_path)
+    assert not outcome.passed
+    assert any(f.startswith("codice:") for f in outcome.failures)
 
 
-def test_rubrica_conteggio_e_lunghezza() -> None:
-    """Numeri fuori tolleranza e risposte troppo lunghe falliscono con motivo esplicito."""
-    caso = _CASES["long_context"]
-    assert valuta_qualita(caso, "Circa 120.").passed
-    assert not valuta_qualita(caso, "Molte volte.").passed
-    troppo_lungo = "x" * 500
-    assert "lunghezza: 500 > 400" in valuta_qualita(caso, troppo_lungo).failures
+def test_count_and_length_rubric() -> None:
+    """Out-of-tolerance numbers and overlong answers fail with an explicit reason."""
+    case = _CASES["long_context"]
+    assert evaluate_quality(case, "Circa 120.").passed
+    assert not evaluate_quality(case, "Molte volte.").passed
+    too_long = "x" * 500
+    assert "lunghezza: 500 > 400" in evaluate_quality(case, too_long).failures
 
 
-def test_rubrica_llm_calls(tmp_path: Path) -> None:
-    """Troppe generazioni per un caso a singola chiamata sono una violazione."""
-    caso = _CASES["evidenze_fornite"]
-    risposta = "Il pilota citato è Charles Leclerc."
-    assert valuta_qualita(caso, risposta, llm_calls=1, workspace=tmp_path).passed
-    esito = valuta_qualita(caso, risposta, llm_calls=2, workspace=tmp_path)
-    assert "llm_calls: 2 > 1" in esito.failures
+def test_llm_calls_rubric(tmp_path: Path) -> None:
+    """Too many generations for a single-call case are a violation."""
+    case = _CASES["evidenze_fornite"]
+    answer = "Il pilota citato è Charles Leclerc."
+    assert evaluate_quality(case, answer, llm_calls=1, workspace=tmp_path).passed
+    outcome = evaluate_quality(case, answer, llm_calls=2, workspace=tmp_path)
+    assert "llm_calls: 2 > 1" in outcome.failures
 
 
-def test_rubrica_file_hello(tmp_path: Path) -> None:
-    """Il check file legge il contenuto reale sul disco del workspace."""
-    caso = _CASES["file_write"]
-    assert not valuta_qualita(caso, "Fatto.", workspace=tmp_path).passed
+def test_hello_file_rubric(tmp_path: Path) -> None:
+    """The file check reads the actual content on the workspace disk."""
+    case = _CASES["file_write"]
+    assert not evaluate_quality(case, "Fatto.", workspace=tmp_path).passed
     target = tmp_path / "tmp/benchmark_inference_hello.txt"
     target.parent.mkdir(parents=True)
     target.write_text("benchmark-ok\n", encoding="utf-8")
-    assert valuta_qualita(caso, "Fatto.", workspace=tmp_path).passed
+    assert evaluate_quality(case, "Fatto.", workspace=tmp_path).passed
 
 
-def _risultato(alias: str, case: str, **override: object) -> dict[str, object]:
+def _result(alias: str, case: str, **override: object) -> dict[str, object]:
     base: dict[str, object] = {
         "alias": alias,
         "case": case,
@@ -125,55 +125,55 @@ def _risultato(alias: str, case: str, **override: object) -> dict[str, object]:
     return base
 
 
-def test_aggrega_gruppi_usa_mediane_e_ignora_cold() -> None:
-    """Le misure cold non entrano nelle mediane per gruppo."""
+def test_aggregate_groups_uses_medians_and_ignores_cold() -> None:
+    """Cold measurements do not enter the per-group medians."""
     results = [
-        _risultato("fast", "chat", total_ms=1000.0),
-        _risultato("fast", "chat", total_ms=3000.0),
-        _risultato("fast", "chat", total_ms=90000.0, cold=True),
+        _result("fast", "chat", total_ms=1000.0),
+        _result("fast", "chat", total_ms=3000.0),
+        _result("fast", "chat", total_ms=90000.0, cold=True),
     ]
-    gruppi = aggrega_gruppi(results)
-    assert len(gruppi) == 1
-    assert gruppi[0]["n"] == 2
-    assert gruppi[0]["median_total_ms"] == 2000.0
+    groups = aggregate_groups(results)
+    assert len(groups) == 1
+    assert groups[0]["n"] == 2
+    assert groups[0]["median_total_ms"] == 2000.0
 
 
-def test_confronta_rifiuta_regressione_qualita_e_accetta_miglioramento() -> None:
-    """Il verdetto è per alias: qualità in calo rifiuta, e2e più veloce accetta."""
-    prima = {"results": [_risultato("fast", "chat"), _risultato("default", "chat")]}
-    dopo = {
+def test_compare_rejects_quality_regression_and_accepts_improvement() -> None:
+    """The verdict is per alias: lower quality rejects, faster e2e accepts."""
+    before = {"results": [_result("fast", "chat"), _result("default", "chat")]}
+    after = {
         "results": [
-            _risultato("fast", "chat", quality_pass=False),
-            _risultato("default", "chat", total_ms=4000.0),
+            _result("fast", "chat", quality_pass=False),
+            _result("default", "chat", total_ms=4000.0),
         ]
     }
-    _rows, verdetti = confronta(prima, dopo)
-    per_alias = {v.alias: v for v in verdetti}
+    _rows, verdicts = compare(before, after)
+    per_alias = {v.alias: v for v in verdicts}
     assert not per_alias["fast"].accepted
     assert any("qualità" in r for r in per_alias["fast"].reasons)
     assert per_alias["default"].accepted
 
 
-def test_confronta_rifiuta_piu_prompt_token_salvo_flag() -> None:
-    """Prompt token in aumento rifiutano, a meno di --allow-more-tokens."""
-    prima = {"results": [_risultato("fast", "chat", prompt_tokens=300)]}
-    dopo = {"results": [_risultato("fast", "chat", prompt_tokens=400)]}
-    _rows, verdetti = confronta(prima, dopo)
-    assert not verdetti[0].accepted
-    _rows, verdetti = confronta(prima, dopo, allow_more_tokens=True)
-    assert verdetti[0].accepted
+def test_compare_rejects_more_prompt_tokens_unless_flag() -> None:
+    """Rising prompt tokens reject, unless --allow-more-tokens is set."""
+    before = {"results": [_result("fast", "chat", prompt_tokens=300)]}
+    after = {"results": [_result("fast", "chat", prompt_tokens=400)]}
+    _rows, verdicts = compare(before, after)
+    assert not verdicts[0].accepted
+    _rows, verdicts = compare(before, after, allow_more_tokens=True)
+    assert verdicts[0].accepted
 
 
 def test_compare_main_markdown(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """La CLI stampa la tabella Markdown e restituisce 0 quando accetta."""
-    prima = tmp_path / "prima.json"
-    dopo = tmp_path / "dopo.json"
-    prima.write_text(json.dumps({"results": [_risultato("fast", "chat")]}), encoding="utf-8")
-    dopo.write_text(
-        json.dumps({"results": [_risultato("fast", "chat", total_ms=4500.0)]}),
+    """The CLI prints the Markdown table and returns 0 when it accepts."""
+    before = tmp_path / "prima.json"
+    after = tmp_path / "dopo.json"
+    before.write_text(json.dumps({"results": [_result("fast", "chat")]}), encoding="utf-8")
+    after.write_text(
+        json.dumps({"results": [_result("fast", "chat", total_ms=4500.0)]}),
         encoding="utf-8",
     )
-    assert compare_main([str(prima), str(dopo), "--markdown"]) == 0
+    assert compare_main([str(before), str(after), "--markdown"]) == 0
     out = capsys.readouterr().out
     assert "| alias |" in out
     assert "fast: ACCETTA" in out

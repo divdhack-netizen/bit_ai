@@ -1,4 +1,4 @@
-"""Micro-benchmark deterministico dei percorsi Python che precedono rete e Ollama."""
+"""Deterministic micro-benchmark of the Python paths that run before network and Ollama."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ from dataclasses import asdict, dataclass
 from functools import partial
 from typing import Any
 
-from assistente.comprensione import scheda_locale
-from assistente.politica_turno import decisione_da_schema
-from assistente.schema_turno import SchemaTurno
-from assistente.session import _costruisci_descrizione_task
-from assistente.tools import normalizza_path_da_llm
+from assistant.comprehension import local_card
+from assistant.turn_policy import decision_from_schema
+from assistant.turn_schema import TurnSchema
+from assistant.session import _build_task_description
+from assistant.tools import normalize_llm_path
 
 _WARMUP_ITERATIONS = 100
 _MEASURED_ITERATIONS = 2_000
@@ -24,16 +24,16 @@ _QUANTILE_BUCKETS = 100
 
 _REQUEST = "Quanto pesa una balenottera azzurra adulta secondo i documenti?"
 _FILE_PATH = "docs/rapporti/balene.pdf"
-_SCHEMA = SchemaTurno(
+_SCHEMA = TurnSchema(
     kind="explain",
     subject="peso balenottera azzurra",
 )
-_TURNO_DECISIONE = decisione_da_schema(_SCHEMA)
+_DECISION_TURN = decision_from_schema(_SCHEMA)
 
 
 @dataclass(frozen=True, slots=True)
 class BenchmarkResult:
-    """Tempi aggregati di una singola operazione locale, espressi in millisecondi."""
+    """Aggregate timings for a single local operation, in milliseconds."""
 
     name: str
     iterations: int
@@ -43,21 +43,21 @@ class BenchmarkResult:
 
 def _measure(name: str, operation: Callable[[], Any]) -> BenchmarkResult:
     """
-    Misura un'operazione pura dopo un warm-up che stabilizza import e cache Python.
+    Measure a pure operation after a warm-up that stabilizes imports and Python caches.
 
     Args:
-        name: Etichetta stabile usata nel report JSON.
-        operation: Callable senza argomenti; il valore restituito viene ignorato.
+        name: Stable label used in the JSON report.
+        operation: Zero-argument callable; its return value is ignored.
 
     Returns:
-        Statistiche mediane e p95 sulle iterazioni configurate.
+        Median and p95 statistics over the configured iterations.
     """
-    # Riscalda bytecode e cache interne per non attribuire il costo di startup al percorso caldo.
+    # Warm up bytecode and internal caches so startup cost is not charged to the hot path.
     for _warmup_iteration in range(_WARMUP_ITERATIONS):
         operation()
 
     durations_ns: list[int] = []
-    # Misura ogni chiamata separatamente per conservare la distribuzione, non solo la media.
+    # Measure each call separately to keep the distribution, not just the average.
     for _measured_iteration in range(_MEASURED_ITERATIONS):
         started_ns = time.perf_counter_ns()
         operation()
@@ -76,46 +76,46 @@ def _measure(name: str, operation: Callable[[], Any]) -> BenchmarkResult:
     )
 
 
-def _nessun_file(_path: str) -> bool:
-    """Esistenza finta: il micro-benchmark non tocca il disco."""
+def _no_file(_path: str) -> bool:
+    """Fake existence check: the micro-benchmark does not touch the disk."""
     return False
 
 
 def _build_react_task() -> str:
     """
-    Compila le istruzioni ReAct closed-corpus con input stabile.
+    Build the closed-corpus ReAct instructions with a stable input.
 
     Returns:
-        Task completo pronto per l'LLM; non viene effettuata alcuna chiamata esterna.
+        Complete task ready for the LLM; no external call is made.
     """
-    return _costruisci_descrizione_task(
+    return _build_task_description(
         _REQUEST,
         False,
-        _TURNO_DECISIONE,
+        _DECISION_TURN,
     )
 
 
 def main() -> None:
     """
-    Esegue i micro-benchmark e stampa un documento JSON confrontabile tra revisioni.
+    Run the micro-benchmarks and print a JSON document comparable across revisions.
 
     Postconditions:
-        Non modifica file e non effettua chiamate di rete o verso Ollama.
+        Modifies no files and makes no network or Ollama calls.
     """
     operations: tuple[tuple[str, Callable[[], Any]], ...] = (
         (
             "turn_policy",
-            partial(decisione_da_schema, _SCHEMA),
+            partial(decision_from_schema, _SCHEMA),
         ),
         (
             "scheda_locale",
-            partial(scheda_locale, _REQUEST, _nessun_file),
+            partial(local_card, _REQUEST, _no_file),
         ),
         ("react_task", _build_react_task),
-        ("file_path", partial(normalizza_path_da_llm, _FILE_PATH)),
+        ("file_path", partial(normalize_llm_path, _FILE_PATH)),
     )
     results: list[BenchmarkResult] = []
-    # Esegue gli stessi percorsi in ordine stabile per produrre report facilmente confrontabili.
+    # Run the same paths in a stable order so the reports are easy to compare.
     for operation_name, operation in operations:
         results.append(_measure(operation_name, operation))
 
@@ -126,6 +126,6 @@ def main() -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
-# Consente l'esecuzione diretta senza introdurre side effect durante l'import nei test.
+# Allow direct execution without side effects at import time in tests.
 if __name__ == "__main__":
     main()

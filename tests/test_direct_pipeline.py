@@ -1,4 +1,4 @@
-"""Test pipeline diretta a singola generazione."""
+"""Tests for the single-generation direct pipeline."""
 
 from __future__ import annotations
 
@@ -7,25 +7,25 @@ from unittest.mock import MagicMock
 import pytest
 from langchain_core.callbacks import BaseCallbackHandler
 
-from assistente.direct_pipeline import PREFISSO_SISTEMA_DIRECT, DirectAnswerPipeline
+from assistant.direct_pipeline import DIRECT_SYSTEM_PREFIX, DirectAnswerPipeline
 
 pytestmark = pytest.mark.unit
 
 
 class _FakeLLM:
-    """LLM di test che emette chunk deterministici."""
+    """Test LLM that emits deterministic chunks."""
 
     def __init__(self, chunks: list[str]) -> None:
         self._chunks = chunks
 
     def stream(self, input: str, config=None, **kwargs):
-        # Espone il prompt per asserzioni sul contenuto inviato al modello.
+        # Expose the prompt for asserts on what was sent to the model.
         self.last_prompt = input
         yield from self._chunks
 
 
-def test_direct_pipeline_prompt_mette_intent_dopo_storico() -> None:
-    """Il prefisso KV resta stabile: identità, memoria, storico, poi intent."""
+def test_direct_pipeline_prompt_puts_intent_after_history() -> None:
+    """The KV prefix stays stable: identity, memory, history, then intent."""
     ui = MagicMock()
     llm = _FakeLLM(["ok"])
     pipeline = DirectAnswerPipeline(
@@ -50,8 +50,8 @@ def test_direct_pipeline_prompt_mette_intent_dopo_storico() -> None:
     assert idx_mem < idx_hist < idx_intent < idx_req
 
 
-def test_direct_pipeline_una_sola_generazione_streaming() -> None:
-    """La pipeline apre lo stream diretto e concatena i chunk."""
+def test_direct_pipeline_single_streaming_generation() -> None:
+    """The pipeline opens the direct stream and joins the chunks."""
     ui = MagicMock()
     llm = _FakeLLM(["Ciao ", "mondo"])
     pipeline = DirectAnswerPipeline(
@@ -68,12 +68,12 @@ def test_direct_pipeline_una_sola_generazione_streaming() -> None:
         callback=callback,
     )
     assert answer == "Ciao mondo"
-    ui.inizia_risposta_diretta.assert_called_once()
+    ui.start_direct_answer.assert_called_once()
     assert "Saluta" in llm.last_prompt
 
 
-def test_direct_pipeline_errore_provider_diventa_diagnostica() -> None:
-    """Un'eccezione del client non propaga lo stack all'utente."""
+def test_direct_pipeline_provider_error_becomes_diagnostics() -> None:
+    """A client exception does not leak the stack trace to the user."""
 
     class _BrokenLLM:
         def stream(self, input: str, config=None, **kwargs):
@@ -95,8 +95,8 @@ def test_direct_pipeline_errore_provider_diventa_diagnostica() -> None:
     assert answer.startswith("Errore inferenza locale:")
 
 
-def test_direct_pipeline_senza_reasoning_non_riprova() -> None:
-    """Con thinking off una risposta vuota è diagnostica, non un secondo stream."""
+def test_direct_pipeline_without_reasoning_does_not_retry() -> None:
+    """With thinking off, an empty answer is a diagnostic, not a second stream."""
 
     class _EmptyOnce:
         calls = 0
@@ -124,14 +124,14 @@ def test_direct_pipeline_senza_reasoning_non_riprova() -> None:
     assert _EmptyOnce.calls == 1
 
 
-def test_direct_pipeline_non_risponde_con_conoscenze_proprie() -> None:
-    """Closed-corpus: la chat diretta rimanda ai documenti, non ai pesi del modello."""
-    assert "solo sui documenti della cartella" in PREFISSO_SISTEMA_DIRECT
-    assert "non dare fatti" in PREFISSO_SISTEMA_DIRECT
+def test_direct_pipeline_does_not_answer_with_own_knowledge() -> None:
+    """Closed corpus: the direct chat points to the documents, not to the model weights."""
+    assert "solo sui documenti della cartella" in DIRECT_SYSTEM_PREFIX
+    assert "non dare fatti" in DIRECT_SYSTEM_PREFIX
 
 
-def test_direct_pipeline_thinking_una_sola_chiamata() -> None:
-    """Con CoT il budget sale in-place: niente seconda generazione."""
+def test_direct_pipeline_thinking_single_call() -> None:
+    """With CoT the budget grows in place: no second generation."""
 
     class _CountingLLM:
         calls = 0

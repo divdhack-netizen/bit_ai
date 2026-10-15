@@ -1,4 +1,4 @@
-"""Contratti sulle firme mostrate al modello nel prompt ReAct."""
+"""Contracts on the signatures shown to the model in the ReAct prompt."""
 
 from __future__ import annotations
 
@@ -6,23 +6,23 @@ import inspect
 
 import pytest
 
-from assistente.file_service import WorkspaceFileService
-from assistente.riassunto import crea_tool_riassunto
-from assistente.tools import crea_tool_file
+from assistant.file_service import WorkspaceFileService
+from assistant.summary import create_summary_tool
+from assistant.tools import create_file_tools
 
 pytestmark = pytest.mark.unit
 
 
-def test_tool_bound_espongono_un_solo_action_input() -> None:
+def test_bound_tools_expose_single_action_input() -> None:
     """
-    Impedisce che dipendenze iniettate appaiano nella firma e vengano copiate da Gemma.
+    Prevents injected dependencies from appearing in the signature and being copied by Gemma.
 
     Postconditions:
-        Ogni callable mostra soltanto action_input, senza service/config nel prompt.
+        Each callable shows only action_input, with no service/config in the prompt.
     """
     file_service = WorkspaceFileService()
-    tools = crea_tool_file(file_service) + crea_tool_riassunto(file_service)
-    # Ispeziona tutte le funzioni nello stesso modo usato dal renderer LangChain.
+    tools = create_file_tools(file_service) + create_summary_tool(file_service)
+    # Inspect every function the same way the LangChain renderer does.
     for tool in tools:
         parameter_names = tuple(inspect.signature(tool.func).parameters)
         assert parameter_names == ("action_input",), (
@@ -30,10 +30,10 @@ def test_tool_bound_espongono_un_solo_action_input() -> None:
         )
 
 
-def test_set_minimo_di_tool_closed_corpus() -> None:
-    """Solo lettura della cartella, ricerca nel contenuto e tre tool di scrittura."""
-    nomi = {tool.name for tool in crea_tool_file(WorkspaceFileService(), write_allowed=True)}
-    assert nomi == {
+def test_minimal_closed_corpus_tool_set() -> None:
+    """Read-only folder access, content search and three write tools."""
+    names = {tool.name for tool in create_file_tools(WorkspaceFileService(), write_allowed=True)}
+    assert names == {
         "leggi_documento",
         "elenca_cartella",
         "elenca_albero",
@@ -43,8 +43,8 @@ def test_set_minimo_di_tool_closed_corpus() -> None:
         "modifica_file",
         "crea_cartella",
     }
-    sola_lettura = {
-        tool.name for tool in crea_tool_file(WorkspaceFileService(), write_allowed=False)
+    read_only = {
+        tool.name for tool in create_file_tools(WorkspaceFileService(), write_allowed=False)
     }
-    assert "scrivi_file" not in sola_lettura
-    assert "cerca_testo" in sola_lettura
+    assert "scrivi_file" not in read_only
+    assert "cerca_testo" in read_only

@@ -1,4 +1,4 @@
-"""Fixture condivise: workspace tmp/test_run, config e2e, gate Ollama."""
+"""Shared fixtures: tmp/test_run workspace, e2e config, Ollama gate."""
 
 from __future__ import annotations
 
@@ -6,16 +6,16 @@ import shutil
 
 import pytest
 
-from assistente.config import (
-    ALIAS_MODELLO_DEFAULT,
+from assistant.config import (
+    DEFAULT_MODEL_ALIAS,
     WORKSPACE,
     ConfigRuntime,
 )
-from assistente.console import ConsoleUI
-from assistente.ollama_runtime import OllamaRuntime
-from assistente.prompt_budget import reset_token_estimate_for_tests
-from assistente.session import SessioneAgente
-from assistente.tools import reset_stato_turno
+from assistant.console import ConsoleUI
+from assistant.ollama_runtime import OllamaRuntime
+from assistant.prompt_budget import reset_token_estimate_for_tests
+from assistant.session import AgentSession
+from assistant.tools import reset_turn_state
 
 pytest_plugins = ["tests.report_plugin"]
 
@@ -25,8 +25,8 @@ DIR_E2E_REL = f"{DIR_TEST_REL}/e2e"
 
 
 @pytest.fixture(autouse=True)
-def stima_token_isolata():
-    """Azzera la calibrazione byte/token: è globale e non deve passare tra test."""
+def isolated_token_estimate():
+    """Reset the byte/token calibration: it is global and must not leak between tests."""
     reset_token_estimate_for_tests()
     yield
     reset_token_estimate_for_tests()
@@ -34,65 +34,65 @@ def stima_token_isolata():
 
 @pytest.fixture
 def workspace_test_dir():
-    """Prepara tmp/test_run vuoto (unit/ + e2e/) e lo rimuove a fine test."""
-    destinazione = WORKSPACE / DIR_TEST_REL
-    if destinazione.exists():
-        shutil.rmtree(destinazione)
-    (destinazione / "unit").mkdir(parents=True)
-    (destinazione / "e2e").mkdir(parents=True)
-    reset_stato_turno()
-    yield destinazione
-    shutil.rmtree(destinazione, ignore_errors=True)
-    reset_stato_turno()
+    """Prepare an empty tmp/test_run (unit/ + e2e/) and remove it after the test."""
+    destination = WORKSPACE / DIR_TEST_REL
+    if destination.exists():
+        shutil.rmtree(destination)
+    (destination / "unit").mkdir(parents=True)
+    (destination / "e2e").mkdir(parents=True)
+    reset_turn_state()
+    yield destination
+    shutil.rmtree(destination, ignore_errors=True)
+    reset_turn_state()
 
 
 @pytest.fixture
 def config_e2e() -> ConfigRuntime:
-    """Config e2e: alias default (quant fissa q4 nella matrice)."""
+    """E2E config: default alias (fixed q4 quantization in the matrix)."""
     return ConfigRuntime(
         verbose=False,
-        verifica_completa=False,
+        full_verification=False,
         burn_protection=False,
-        modello=ALIAS_MODELLO_DEFAULT,
+        model=DEFAULT_MODEL_ALIAS,
     )
 
 
 @pytest.fixture
-def sessione_agente(config_e2e: ConfigRuntime) -> SessioneAgente:
-    """Sessione agente con UI non verbose (adatta a pytest non-TTY)."""
+def agent_session(config_e2e: ConfigRuntime) -> AgentSession:
+    """Agent session with a non-verbose UI (suitable for non-TTY pytest)."""
     ui = ConsoleUI()
-    ui.imposta_verbose(config_e2e.verbose)
-    return SessioneAgente(ui)
+    ui.set_verbose(config_e2e.verbose)
+    return AgentSession(ui)
 
 
 @pytest.fixture(scope="session")
-def ollama_disponibile() -> tuple[bool, str]:
+def ollama_available() -> tuple[bool, str]:
     """
-    Probe Ollama una sola volta per sessione pytest.
+    Probe Ollama only once per pytest session.
 
-    Usa OllamaRuntime così il fallback ai tag installati coincide con l'agente.
+    Uses OllamaRuntime so the fallback to installed tags matches the agent.
     Returns:
-        (ok, dettaglio): dettaglio è il tag attivo oppure il messaggio d'errore.
+        (ok, detail): detail is the active tag or the error message.
     """
     runtime = OllamaRuntime()
     try:
-        # Budget minimi: bastano pochi token per validare disponibilità.
-        llm = runtime.get_llm(ALIAS_MODELLO_DEFAULT, 512, 8)
+        # Minimal budgets: a few tokens are enough to check availability.
+        llm = runtime.get_llm(DEFAULT_MODEL_ALIAS, 512, 8)
         llm.invoke("ok")
         return True, runtime.active_tag or "sconosciuto"
-    except Exception as errore:
-        return False, f"{type(errore).__name__}: {errore}"
+    except Exception as error:
+        return False, f"{type(error).__name__}: {error}"
     finally:
-        # Non unloadare: i test e2e successivi riusano lo stesso artefatto caldo.
+        # Do not unload: the following e2e tests reuse the same warm artifact.
         runtime.close(unload=False)
 
 
 @pytest.fixture
-def richiede_ollama(ollama_disponibile: tuple[bool, str]):
-    """Skippa il test se Ollama/modello risolto non sono disponibili."""
-    ok, dettaglio = ollama_disponibile
+def requires_ollama(ollama_available: tuple[bool, str]):
+    """Skip the test if Ollama or the resolved model is not available."""
+    ok, detail = ollama_available
     if not ok:
         pytest.skip(
-            f"Ollama/modello {ALIAS_MODELLO_DEFAULT} "
-            f"non disponibile: {dettaglio}"
+            f"Ollama/modello {DEFAULT_MODEL_ALIAS} "
+            f"non disponibile: {detail}"
         )

@@ -1,4 +1,4 @@
-"""Test rilevamento host con probe finti: nessun sysctl né nvidia-smi reale."""
+"""Host detection tests with fake probes: no real sysctl or nvidia-smi."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from assistente.host import (
+from assistant.host import (
     AMPLE_MEMORY_BYTES,
     DEFAULT_OLLAMA_BASE_URL,
     GIBIBYTE,
@@ -28,8 +28,8 @@ _MEMORY_8_GIB = 8 * GIBIBYTE
 
 
 def _probes(**overrides: object) -> HostProbes:
-    """Costruisce probe deterministici partendo da uno snapshot Darwin 16 GB."""
-    valori: dict[str, object] = {
+    """Build deterministic probes starting from a Darwin 16 GB snapshot."""
+    values: dict[str, object] = {
         "system": lambda: "Darwin",
         "machine": lambda: "arm64",
         "sysctl": lambda name: {
@@ -42,20 +42,20 @@ def _probes(**overrides: object) -> HostProbes:
         "cpu_count": lambda: 8,
         "posix_memory_bytes": lambda: _MEMORY_16_GIB,
     }
-    valori.update(overrides)
-    return HostProbes(**valori)  # type: ignore[arg-type]
+    values.update(overrides)
+    return HostProbes(**values)  # type: ignore[arg-type]
 
 
-def test_parse_apple_chip_family_pro_prima_del_base() -> None:
-    """M4 Pro non deve collassare sul chip base M4."""
+def test_parse_apple_chip_family_pro_before_base() -> None:
+    """M4 Pro must not collapse onto the base M4 chip."""
     assert parse_apple_chip_family("Apple M4 Pro") == "m4_pro"
     assert parse_apple_chip_family("Apple M4") == "m4"
     assert parse_apple_chip_family("Apple M1 Ultra") == "m1_ultra"
     assert parse_apple_chip_family("Intel Core i7") is None
 
 
-def test_detect_host_m4_16gb_non_amplia_contesto() -> None:
-    """Il profilo Air/base 16 GB resta quello storico: niente ctx 8192."""
+def test_detect_host_m4_16gb_does_not_widen_context() -> None:
+    """The Air/base 16 GB profile stays the historical one: no 8192 ctx."""
     host = detect_host(_probes())
     assert host.os == "darwin"
     assert host.chip_family == "m4"
@@ -72,8 +72,8 @@ def test_detect_host_m4_16gb_non_amplia_contesto() -> None:
     assert options.kv_cache_type == "q4_0"
 
 
-def test_detect_host_m4_pro_amplia_anche_sotto_32gb() -> None:
-    """Pro/Max/Ultra hanno cooling e possono allargare le route pesanti."""
+def test_detect_host_m4_pro_widens_even_below_32gb() -> None:
+    """Pro/Max/Ultra have active cooling and can widen the heavy routes."""
     host = detect_host(
         _probes(
             sysctl=lambda name: {
@@ -88,8 +88,8 @@ def test_detect_host_m4_pro_amplia_anche_sotto_32gb() -> None:
     assert can_expand_context(host) is True
 
 
-def test_linux_nvidia_usa_vram_come_memoria_inferenza() -> None:
-    """Su Linux i pesi si misurano in VRAM, non nella RAM di sistema."""
+def test_linux_nvidia_uses_vram_as_inference_memory() -> None:
+    """On Linux the weights are measured in VRAM, not in system RAM."""
     meminfo = "MemTotal:       32768000 kB\nMemAvailable:   20000000 kB\n"
     host = detect_host(
         _probes(
@@ -110,7 +110,7 @@ def test_linux_nvidia_usa_vram_come_memoria_inferenza() -> None:
 
 
 def test_linux_cpu_only_num_gpu_zero() -> None:
-    """Senza nvidia-smi l'offload GPU va disattivato esplicitamente."""
+    """Without nvidia-smi the GPU offload must be explicitly disabled."""
     host = detect_host(
         _probes(
             system=lambda: "Linux",
@@ -126,8 +126,8 @@ def test_linux_cpu_only_num_gpu_zero() -> None:
     assert inference_host_options(host).num_gpu == 0
 
 
-def test_intel_mac_non_forza_gpu() -> None:
-    """Darwin x86 non imposta num_gpu: Ollama decide da solo."""
+def test_intel_mac_does_not_force_gpu() -> None:
+    """Darwin x86 does not set num_gpu: Ollama decides on its own."""
     host = detect_host(
         _probes(
             machine=lambda: "x86_64",
@@ -142,8 +142,8 @@ def test_intel_mac_non_forza_gpu() -> None:
     assert inference_host_options(host).num_gpu is None
 
 
-def test_keep_alive_ampio_da_32_gib() -> None:
-    """Da 32 GiB in su si amplia il contesto; il keep-alive resta 30m."""
+def test_keep_alive_wide_from_32_gib() -> None:
+    """From 32 GiB up the context widens; keep-alive stays at 30m."""
     host = detect_host(
         _probes(
             sysctl=lambda name: {
@@ -159,15 +159,15 @@ def test_keep_alive_ampio_da_32_gib() -> None:
     assert can_expand_context(host) is True
 
 
-def test_parse_meminfo_e_nvidia_smi() -> None:
-    """I parser restano robusti a righe extra e a più GPU."""
+def test_parse_meminfo_and_nvidia_smi() -> None:
+    """The parsers stay robust to extra lines and multiple GPUs."""
     assert parse_meminfo_bytes("MemTotal: 1024 kB\n") == 1024 * 1024
     assert parse_meminfo_bytes("MemAvailable: 10 kB\n") == 0
     assert parse_nvidia_smi_mib("8192\n4096\n") == 8192 * (1024**2)
 
 
-def test_ollama_base_url_normalizza_host_senza_schema() -> None:
-    """OLLAMA_HOST senza schema diventa un URL httpx-compatibile."""
+def test_ollama_base_url_normalizes_host_without_scheme() -> None:
+    """OLLAMA_HOST without a scheme becomes an httpx-compatible URL."""
     assert ollama_base_url({}) == DEFAULT_OLLAMA_BASE_URL
     assert ollama_base_url({"OLLAMA_HOST": "127.0.0.1:11434"}) == (
         "http://127.0.0.1:11434"
@@ -178,15 +178,15 @@ def test_ollama_base_url_normalizza_host_senza_schema() -> None:
 
 
 def test_processor_cpu_only() -> None:
-    """Diagnostica CPU fallback: ignora stringhe miste GPU/CPU."""
+    """CPU fallback diagnostics: ignore mixed GPU/CPU strings."""
     assert processor_looks_cpu_only("CPU") is True
     assert processor_looks_cpu_only("100% GPU") is False
     assert processor_looks_cpu_only("") is False
 
 
-def test_parse_pmset_battery_e_low_power() -> None:
-    """Parser Darwin: AC vs batteria e flag lowpowermode."""
-    from assistente.host import parse_pmset_low_power_mode, parse_pmset_on_battery
+def test_parse_pmset_battery_and_low_power() -> None:
+    """Darwin parser: AC vs battery and the lowpowermode flag."""
+    from assistant.host import parse_pmset_low_power_mode, parse_pmset_on_battery
 
     assert parse_pmset_on_battery("Now drawing from 'Battery Power'\n") is True
     assert parse_pmset_on_battery("Now drawing from 'AC Power'\n") is False
@@ -196,9 +196,9 @@ def test_parse_pmset_battery_e_low_power() -> None:
     assert parse_pmset_low_power_mode(" lowpowermode         0\n") is False
 
 
-def test_detect_power_usa_probe_iniettabili() -> None:
-    """detect_power non esegue pmset reale se i probe sono mockati."""
-    from assistente.host import detect_power, reset_power_cache_for_tests
+def test_detect_power_uses_injectable_probes() -> None:
+    """detect_power does not run the real pmset when the probes are mocked."""
+    from assistant.host import detect_power, reset_power_cache_for_tests
 
     reset_power_cache_for_tests()
     commands: list[list[str]] = []
@@ -217,9 +217,9 @@ def test_detect_power_usa_probe_iniettabili() -> None:
     assert commands
 
 
-def test_pid_daemon_ollama_preferisce_serve(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Tra più processi `ollama` vince quello con `serve` in cmdline."""
-    from assistente.host import pid_daemon_ollama
+def test_ollama_daemon_pid_prefers_serve(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Among several `ollama` processes, the one with `serve` in its cmdline wins."""
+    from assistant.host import pid_daemon_ollama
 
     def fake_run(argv: list[str]) -> str | None:
         if argv[:2] == ["pgrep", "-x"]:
@@ -230,20 +230,20 @@ def test_pid_daemon_ollama_preferisce_serve(monkeypatch: pytest.MonkeyPatch) -> 
             return "ollama serve"
         return None
 
-    monkeypatch.setattr("assistente.host._run_command", fake_run)
+    monkeypatch.setattr("assistant.host._run_command", fake_run)
     assert pid_daemon_ollama() == 200
 
 
-def test_pid_daemon_ollama_ignora_command_line_agente(
+def test_ollama_daemon_pid_ignores_agent_command_line(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Una cmdline Python/agente non viene presa per il daemon."""
-    from assistente.host import pid_daemon_ollama
+    """A Python/agent cmdline is not mistaken for the daemon."""
+    from assistant.host import pid_daemon_ollama
 
     def fake_run(argv: list[str]) -> str | None:
         if argv[:2] == ["pgrep", "-x"]:
             return "50"
-        return "python -m pytest assistente ollama serve"
+        return "python -m pytest assistant ollama serve"
 
-    monkeypatch.setattr("assistente.host._run_command", fake_run)
+    monkeypatch.setattr("assistant.host._run_command", fake_run)
     assert pid_daemon_ollama() is None
