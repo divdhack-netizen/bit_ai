@@ -1,4 +1,4 @@
-"""Test memoria progetto e compaction strutturata dello storico."""
+"""Tests for project memory and structured history compaction."""
 
 from __future__ import annotations
 
@@ -6,15 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from assistente.memoria import MemoriaConversazione
-from assistente.project_memory import format_project_memory_block, load_project_memory
-from assistente.prompt_budget import estimate_tokens
+from assistant.memory import ConversationMemory
+from assistant.project_memory import format_project_memory_block, load_project_memory
+from assistant.prompt_budget import estimate_tokens
 
 pytestmark = pytest.mark.unit
 
 
 def test_load_project_memory_agents_md(tmp_path: Path) -> None:
-    """AGENTS.md nella workspace viene caricato come memoria progetto."""
+    """AGENTS.md in the workspace is loaded as project memory."""
     (tmp_path / "AGENTS.md").write_text("# Rules\nUse pytest.\n", encoding="utf-8")
     text = load_project_memory(tmp_path)
     assert "Use pytest" in text
@@ -23,30 +23,30 @@ def test_load_project_memory_agents_md(tmp_path: Path) -> None:
     assert "Use pytest" in block
 
 
-def test_load_project_memory_assente(tmp_path: Path) -> None:
-    """Workspace senza file → stringa vuota."""
+def test_load_project_memory_missing(tmp_path: Path) -> None:
+    """Workspace without the file → empty string."""
     assert load_project_memory(tmp_path) == ""
     assert format_project_memory_block(tmp_path) == ""
 
 
-def test_memoria_compaction_strutturata_quando_budget_stretto() -> None:
+def test_memory_structured_compaction_when_budget_tight() -> None:
     """
-    Con budget basso e molti turni, i vecchi finiscono in Compact storico.
+    With a low budget and many turns, the old ones end up in the history Compact.
 
-    I messaggi utente recenti restano verbatim nei turni non compattati.
+    Recent user messages stay verbatim in the non-compacted turns.
     """
-    memoria = MemoriaConversazione(max_turni=6, max_caratteri=50_000)
-    # Turni abbastanza lunghi da non entrare tutti in un budget stretto.
+    memory = ConversationMemory(max_turns=6, max_chars=50_000)
+    # Turns long enough that they cannot all fit in a tight budget.
     for index in range(5):
-        memoria.registra(
+        memory.record(
             f"richiesta utente numero {index} con vincolo non-touch-legacy",
             f"Assistente ha letto file_{index}.py e risposto con dettagli " + ("x" * 200),
         )
-    # Budget che forza l'omissione di alcuni turni interi.
-    formatted = memoria.formatta(max_tokens=180)
+    # A budget that forces some whole turns to be omitted.
+    formatted = memory.format(max_tokens=180)
     assert estimate_tokens(formatted) <= 200
-    # Compact strutturato presente oppure almeno i turni più recenti.
+    # Structured Compact present, or at least the most recent turns.
     assert "Compact storico" in formatted or "Turno" in formatted
-    # L'ultimo messaggio utente resta nel testo (verbatim).
+    # The last user message stays in the text (verbatim).
     assert "richiesta utente numero 4" in formatted
     assert "Compact storico" in formatted

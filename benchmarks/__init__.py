@@ -1,1 +1,1 @@
-"""Suite di benchmark locali (hot-path Python e inferenza Ollama)."""
+"""Local benchmark suites (Python hot paths and Ollama inference)."""

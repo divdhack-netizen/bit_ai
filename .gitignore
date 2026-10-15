@@ -1,4 +1,4 @@
-# Ambiente Python
+# Python environment
 venv/
 .venv/
 __pycache__/
@@ -8,7 +8,7 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Segreti (difesa preventiva)
+# Secrets (defense in depth)
 .env
 .env.*
 *.pem
@@ -16,19 +16,19 @@ htmlcov/
 **/credentials.json
 **/secrets.*
 
-# Output, log e file temporanei generati a runtime
+# Output, logs and temporary files generated at runtime
 output/
 tmp/
 *.log
 
-# Configurazioni locali di editor e assistenti
+# Local editor and assistant settings
 .claude/settings.local.json
 .cursor/
 .vscode/
 .idea/
 .DS_Store
 
-# File personali di prova
+# Personal scratch files
 rassegna.txt
 notes/
 configurazione.txt/

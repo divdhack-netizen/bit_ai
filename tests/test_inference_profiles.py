@@ -1,11 +1,11 @@
-"""Test profili inferenza con quantizzazione fissa per alias."""
+"""Tests for inference profiles with fixed quantization per alias."""
 
 from __future__ import annotations
 
 import pytest
 
-from assistente.host import HostCapabilities
-from assistente.inference_profiles import (
+from assistant.host import HostCapabilities
+from assistant.inference_profiles import (
     GIBIBYTE,
     TAG_INSTALL_CANDIDATES,
     memory_warning,
@@ -13,7 +13,7 @@ from assistente.inference_profiles import (
     normalize_ollama_names,
     profile_for_route,
     resolve_model_variant,
-    contesto_espanso,
+    expanded_context,
     context_fits_pool,
     context_length_from_show,
     session_context_tokens,
@@ -26,15 +26,15 @@ _MEMORY_16_GIB = 16 * GIBIBYTE
 _MEMORY_32_GIB = 32 * GIBIBYTE
 
 
-def test_resolve_model_variant_fast_sempre_q4() -> None:
-    """fast risolve sempre a Gemma 4 E4B q4."""
+def test_resolve_model_variant_fast_always_q4() -> None:
+    """fast always resolves to Gemma 4 E4B q4."""
     variant = resolve_model_variant("fast")
     assert variant.tag == "gemma4:e4b"
     assert variant.quantization == "q4"
 
 
-def test_resolve_model_variant_default_sempre_q4() -> None:
-    """default risolve sempre a Gemma 4 12B q4."""
+def test_resolve_model_variant_default_always_q4() -> None:
+    """default always resolves to Gemma 4 12B q4."""
     variant = resolve_model_variant("default")
     assert variant.tag == "gemma4:12b"
     assert variant.quantization == "q4"
@@ -42,38 +42,38 @@ def test_resolve_model_variant_default_sempre_q4() -> None:
 
 
 
-def test_resolve_model_variant_alias_invalido() -> None:
-    """Alias sconosciuti falliscono."""
+def test_resolve_model_variant_invalid_alias() -> None:
+    """Unknown aliases fail."""
     with pytest.raises(ValueError, match="Alias modello non valido"):
         resolve_model_variant("enorme")
 
 
-def test_quantizzazione_per_alias() -> None:
-    """La quantizzazione è fissata sulla variante, non da un helper separato."""
+def test_quantization_per_alias() -> None:
+    """Quantization is pinned on the variant, not by a separate helper."""
     assert resolve_model_variant("FAST").quantization == "q4"
     assert resolve_model_variant("Default").quantization == "q4"
 
 
 
 
-def test_memory_warning_per_fast_su_memoria_stretta() -> None:
-    """E4B q4 sotto headroom minimo produce un avviso."""
+def test_memory_warning_for_fast_on_tight_memory() -> None:
+    """E4B q4 below the minimum headroom produces a warning."""
     variant = resolve_model_variant("fast")
-    avviso = memory_warning(variant, total_memory_bytes=_MEMORY_16_GIB)
-    assert avviso is None
-    avviso_12 = memory_warning(variant, total_memory_bytes=_MEMORY_12_GIB)
-    assert avviso_12 is not None
-    assert "gemma4:e4b" in avviso_12
+    warning = memory_warning(variant, total_memory_bytes=_MEMORY_16_GIB)
+    assert warning is None
+    warning_12 = memory_warning(variant, total_memory_bytes=_MEMORY_12_GIB)
+    assert warning_12 is not None
+    assert "gemma4:e4b" in warning_12
 
 
-def test_memory_warning_assente_su_memoria_ampia() -> None:
-    """Con abbastanza RAM non c'è avviso per default."""
+def test_memory_warning_absent_on_ample_memory() -> None:
+    """With enough RAM there is no warning for default."""
     variant = resolve_model_variant("default")
     assert memory_warning(variant, total_memory_bytes=_MEMORY_32_GIB) is None
 
 
-def test_profile_fast_su_16gb_usa_budget_pieni() -> None:
-    """E4B su 16 GB ha residuo alto: react resta sui budget standard."""
+def test_profile_fast_on_16gb_uses_full_budgets() -> None:
+    """E4B on 16 GB has plenty left over: react stays on the standard budgets."""
     profile = profile_for_route(
         "fast",
         "react",
@@ -83,8 +83,8 @@ def test_profile_fast_su_16gb_usa_budget_pieni() -> None:
     assert profile.output_tokens == 1024
 
 
-def test_profile_default_su_12gb_riduce_react() -> None:
-    """12B su 12 GB lascia poco residuo: react taglia la KV."""
+def test_profile_default_on_12gb_reduces_react() -> None:
+    """12B on 12 GB leaves little over: react cuts the KV."""
     profile = profile_for_route(
         "default",
         "react",
@@ -94,15 +94,15 @@ def test_profile_default_su_12gb_riduce_react() -> None:
     assert profile.output_tokens == 1024
 
 
-def test_model_variants_ordine_stabile() -> None:
-    """La matrice espone esattamente due varianti fisse."""
+def test_model_variants_stable_order() -> None:
+    """The matrix exposes exactly two fixed variants."""
     variants = model_variants()
     assert [item.alias for item in variants] == ["fast", "default"]
     assert [item.quantization for item in variants] == ["q4", "q4"]
 
 
-def test_host_m4_16gb_coincide_con_budget_storici() -> None:
-    """Apple M4 16 GB con host esplicito non cambia ctx/predict rispetto a oggi."""
+def test_host_m4_16gb_matches_historical_budgets() -> None:
+    """Apple M4 16 GB with an explicit host does not change ctx/predict from today."""
     host = HostCapabilities(
         os="darwin",
         arch="arm64",
@@ -130,8 +130,8 @@ def test_host_m4_16gb_coincide_con_budget_storici() -> None:
     assert session_context_tokens("default", host=host) == 6144
 
 
-def test_host_m4_pro_amplia_react() -> None:
-    """M4 Pro allarga solo le route pesanti quando default entra."""
+def test_host_m4_pro_widens_react() -> None:
+    """M4 Pro widens only the heavy routes when default fits."""
     host = HostCapabilities(
         os="darwin",
         arch="arm64",
@@ -150,11 +150,11 @@ def test_host_m4_pro_amplia_react() -> None:
     assert direct.context_tokens == 8192
 
 
-def test_contesto_16gb_sale_a_8192_solo_con_kv_q4() -> None:
-    """fast/default su 16 GB fanno uno scalino se la cache è q4_0 e la KV entra."""
+def test_16gb_context_rises_to_8192_only_with_kv_q4() -> None:
+    """fast/default on 16 GB take one step up if the cache is q4_0 and the KV fits."""
     base = 6144
     assert (
-        contesto_espanso(
+        expanded_context(
             base,
             alias="default",
             kv_cache_type="q8_0",
@@ -166,7 +166,7 @@ def test_contesto_16gb_sale_a_8192_solo_con_kv_q4() -> None:
         == base
     )
     assert (
-        contesto_espanso(
+        expanded_context(
             base,
             alias="default",
             kv_cache_type="q4_0",
@@ -178,7 +178,7 @@ def test_contesto_16gb_sale_a_8192_solo_con_kv_q4() -> None:
         == 8192
     )
     assert (
-        contesto_espanso(
+        expanded_context(
             4096,
             alias="default",
             kv_cache_type="q4_0",
@@ -191,8 +191,8 @@ def test_contesto_16gb_sale_a_8192_solo_con_kv_q4() -> None:
     )
 
 
-def test_turno_pieno_su_host_ampio_fa_un_altro_scalino() -> None:
-    """Oltre 8192, il turno che riempie la finestra può arrivare a 16384."""
+def test_full_turn_on_ample_host_takes_another_step() -> None:
+    """Above 8192, the turn that fills the window can reach 16384."""
     kwargs = dict(
         alias="default",
         kv_cache_type="q4_0",
@@ -201,14 +201,14 @@ def test_turno_pieno_su_host_ampio_fa_un_altro_scalino() -> None:
         can_expand=True,
         tight=False,
     )
-    assert contesto_espanso(8192, **kwargs) == 12288
-    pieno = contesto_espanso(
+    assert expanded_context(8192, **kwargs) == 12288
+    full = expanded_context(
         8192,
         prompt_tokens=int(12288 * 0.8),
         model_ceiling=32768,
         **kwargs,
     )
-    assert pieno == 16384
+    assert full == 16384
     assert context_fits_pool(_MEMORY_16_GIB, 6.6, 8192, "q4_0")
     assert context_length_from_show(
         {"model_info": {"gemma4.context_length": 32768}}
@@ -216,7 +216,7 @@ def test_turno_pieno_su_host_ampio_fa_un_altro_scalino() -> None:
 
 
 def test_tag_install_candidates_gemma4() -> None:
-    """Fallback libreria per E4B/12B; `gemma4` (latest) vale solo per E4B."""
+    """Library fallback for E4B/12B; `gemma4` (latest) applies only to E4B."""
     assert TAG_INSTALL_CANDIDATES["gemma4:e4b"] == (
         "gemma4:e4b",
         "gemma4:e4b-it-q4_K_M",
@@ -226,10 +226,10 @@ def test_tag_install_candidates_gemma4() -> None:
         "gemma4:12b",
         "gemma4:12b-it-q4_K_M",
     )
-    catalogo = {"gemma4:12b-it-q4_K_M"}
-    assert variant_is_installed("gemma4:12b", catalogo)
-    assert select_installed_tag("gemma4:12b", catalogo) == "gemma4:12b-it-q4_K_M"
-    assert not variant_is_installed("gemma4:e4b", catalogo)
+    catalog = {"gemma4:12b-it-q4_K_M"}
+    assert variant_is_installed("gemma4:12b", catalog)
+    assert select_installed_tag("gemma4:12b", catalog) == "gemma4:12b-it-q4_K_M"
+    assert not variant_is_installed("gemma4:e4b", catalog)
     latest = normalize_ollama_names({"gemma4:latest"})
     assert select_installed_tag("gemma4:e4b", latest) == "gemma4"
     assert not variant_is_installed("gemma4:12b", latest)

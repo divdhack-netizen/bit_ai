@@ -1,4 +1,4 @@
-"""Test ciclo di vita OllamaRuntime: cache, unload e residency."""
+"""OllamaRuntime lifecycle tests: cache, unload and residency."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from assistente.ollama_runtime import (
+from assistant.ollama_runtime import (
     OllamaRuntime,
     RuntimeKey,
     StreamingOllamaLLM,
@@ -18,12 +18,12 @@ pytestmark = pytest.mark.unit
 
 
 def _factory() -> MagicMock:
-    """Factory LLM che restituisce un nuovo mock a ogni chiamata."""
+    """LLM factory that returns a new mock on every call."""
     return MagicMock(side_effect=lambda **kwargs: MagicMock(**kwargs))
 
 
-def test_get_llm_riusa_cache_stessa_chiave() -> None:
-    """Profili identici condividono lo stesso wrapper LangChain."""
+def test_get_llm_reuses_cache_same_key() -> None:
+    """Identical profiles share the same LangChain wrapper."""
     factory = _factory()
     runtime = OllamaRuntime(llm_factory=factory, manage_residency=False)
     first = runtime.get_llm("default", 4096, 768)
@@ -33,9 +33,9 @@ def test_get_llm_riusa_cache_stessa_chiave() -> None:
     runtime.close(unload=False)
 
 
-def test_llm_cache_lru_evict_non_chiama_unload() -> None:
-    """Oltre il tetto si droppano wrapper Python, senza POST di unload."""
-    from assistente.ollama_runtime import LLM_CACHE_LIMIT
+def test_llm_cache_lru_evict_does_not_call_unload() -> None:
+    """Past the cap, Python wrappers are dropped with no unload POST."""
+    from assistant.ollama_runtime import LLM_CACHE_LIMIT
 
     http = MagicMock()
     factory = _factory()
@@ -54,8 +54,8 @@ def test_llm_cache_lru_evict_non_chiama_unload() -> None:
     runtime.close(unload=False)
 
 
-def test_switch_tag_aggiorna_active_tag() -> None:
-    """Il cambio modello aggiorna il tag attivo applicativo."""
+def test_switch_tag_updates_active_tag() -> None:
+    """Switching model updates the application's active tag."""
     runtime = OllamaRuntime(llm_factory=_factory(), manage_residency=False)
     runtime.get_llm("fast", 4096, 512)
     assert runtime.active_tag == "gemma4:e4b"
@@ -64,8 +64,8 @@ def test_switch_tag_aggiorna_active_tag() -> None:
     runtime.close(unload=False)
 
 
-def test_unload_active_senza_residency_non_apre_http() -> None:
-    """Con manage_residency=False unload non contatta Ollama."""
+def test_unload_active_without_residency_does_not_open_http() -> None:
+    """With manage_residency=False, unload does not contact Ollama."""
     http = MagicMock()
     runtime = OllamaRuntime(
         llm_factory=_factory(),
@@ -78,8 +78,8 @@ def test_unload_active_senza_residency_non_apre_http() -> None:
     runtime.close(unload=False)
 
 
-def test_runtime_key_distingue_contesto_e_reasoning() -> None:
-    """Contesto o reasoning diversi non collidono nella cache."""
+def test_runtime_key_distinguishes_context_and_reasoning() -> None:
+    """Different context or reasoning do not collide in the cache."""
     assert RuntimeKey("gemma4:12b", 4096) != RuntimeKey("gemma4:12b", 6144)
     assert RuntimeKey("gemma4:12b", 4096, reasoning=False) != RuntimeKey(
         "gemma4:12b",
@@ -88,8 +88,8 @@ def test_runtime_key_distingue_contesto_e_reasoning() -> None:
     )
 
 
-def test_get_llm_riusa_cache_con_num_predict_diverso() -> None:
-    """Il tetto di output non ricostruisce il client HTTP."""
+def test_get_llm_reuses_cache_with_different_num_predict() -> None:
+    """The output cap does not rebuild the HTTP client."""
     factory = _factory()
     runtime = OllamaRuntime(llm_factory=factory, manage_residency=False)
     first = runtime.get_llm("default", 4096, 768)
@@ -99,14 +99,14 @@ def test_get_llm_riusa_cache_con_num_predict_diverso() -> None:
     runtime.close(unload=False)
 
 
-def test_get_llm_applica_num_gpu_dalle_opzioni_host() -> None:
-    """Le opzioni host finiscono nel wrapper LangChain solo se valorizzate."""
-    from assistente.host import InferenceHostOptions
+def test_get_llm_applies_num_gpu_from_host_options() -> None:
+    """Host options reach the LangChain wrapper only when set."""
+    from assistant.host import InferenceHostOptions
 
-    catturato: dict[str, object] = {}
+    captured: dict[str, object] = {}
 
     def factory(**kwargs: object) -> MagicMock:
-        catturato.update(kwargs)
+        captured.update(kwargs)
         return MagicMock(**kwargs)
 
     options = InferenceHostOptions(
@@ -125,44 +125,44 @@ def test_get_llm_applica_num_gpu_dalle_opzioni_host() -> None:
         keep_alive="5m",
     )
     runtime.get_llm("default", 4096, 768)
-    assert catturato["num_gpu"] == -1
-    assert catturato["num_thread"] == 4
-    assert catturato["reasoning"] is True
-    assert catturato["base_url"]
+    assert captured["num_gpu"] == -1
+    assert captured["num_thread"] == 4
+    assert captured["reasoning"] is True
+    assert captured["base_url"]
     runtime.close(unload=False)
 
 
-def test_get_llm_reasoning_false_solo_se_richiesto() -> None:
-    """Wrapper distinti per reasoning True/False; False è il taglio termico esplicito."""
-    catturati: list[dict[str, object]] = []
+def test_get_llm_reasoning_false_only_if_requested() -> None:
+    """Separate wrappers for reasoning True/False; False is the explicit thermal cut."""
+    captured: list[dict[str, object]] = []
 
     def factory(**kwargs: object) -> MagicMock:
-        catturati.append(dict(kwargs))
+        captured.append(dict(kwargs))
         return MagicMock(**kwargs)
 
     runtime = OllamaRuntime(llm_factory=factory, manage_residency=False)
-    acceso = runtime.get_llm("default", 4096, 768)
-    spento = runtime.get_llm("default", 4096, 768, reasoning=False)
-    assert spento is not acceso
-    assert catturati[0]["reasoning"] is True
-    assert catturati[1]["reasoning"] is False
+    on = runtime.get_llm("default", 4096, 768)
+    off = runtime.get_llm("default", 4096, 768, reasoning=False)
+    assert off is not on
+    assert captured[0]["reasoning"] is True
+    assert captured[1]["reasoning"] is False
     runtime.close(unload=False)
 
 
-def test_base_url_da_ollama_host(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Senza base_url esplicito si legge OLLAMA_HOST già normalizzato."""
+def test_base_url_from_ollama_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without an explicit base_url, the already normalized OLLAMA_HOST is read."""
     monkeypatch.setenv("OLLAMA_HOST", "10.1.2.3:11434")
     runtime = OllamaRuntime(llm_factory=_factory(), manage_residency=False)
     assert runtime._base_url == "http://10.1.2.3:11434"
     runtime.close(unload=False)
 
 
-def test_preload_con_memory_warning_non_tocca_modello_attivo(
+def test_preload_with_memory_warning_does_not_touch_active_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Su profilo a rischio memoria, preload non scarica il modello residente
-    e non avvia generate sul tag richiesto.
+    On a memory-risk profile, preload does not unload the resident model
+    and does not start generate on the requested tag.
     """
     http = MagicMock()
     runtime = OllamaRuntime(
@@ -172,24 +172,24 @@ def test_preload_con_memory_warning_non_tocca_modello_attivo(
     )
     runtime._active_tag = "gemma4:12b"
     monkeypatch.setattr(
-        "assistente.ollama_runtime.memory_warning",
+        "assistant.ollama_runtime.memory_warning",
         lambda variant, **_kwargs: (
             f"{variant.tag} troppo grande per preload immediato"
         ),
     )
-    # Headroom insufficiente simulato dal monkeypatch.
+    # Insufficient headroom simulated by the monkeypatch.
     warning = runtime.preload("fast")
     assert warning is not None
     assert "troppo grande" in warning
     assert runtime.last_memory_warning == warning
-    # Il modello utile resta residente: nessun POST a Ollama.
+    # The useful model stays resident: no POST to Ollama.
     assert runtime.active_tag == "gemma4:12b"
     http.post.assert_not_called()
     runtime.close(unload=False)
 
 
 class _StreamPull:
-    """Context manager minimo che imita httpx.Client.stream per `/api/pull`."""
+    """Minimal context manager that mimics httpx.Client.stream for `/api/pull`."""
 
     def __init__(self, lines: list[str]) -> None:
         self._lines = lines
@@ -207,8 +207,8 @@ class _StreamPull:
         return None
 
 
-def test_pull_model_invalida_catalogo_e_notifica_progresso() -> None:
-    """Lo stream NDJSON aggiorna il progresso e svuota la cache `/api/tags`."""
+def test_pull_model_invalidates_catalog_and_notifies_progress() -> None:
+    """The NDJSON stream updates progress and clears the `/api/tags` cache."""
     http = MagicMock()
     http.stream.return_value = _StreamPull(
         [
@@ -224,17 +224,17 @@ def test_pull_model_invalida_catalogo_e_notifica_progresso() -> None:
         manage_residency=True,
     )
     runtime._available_models_cache = {"altro"}
-    eventi: list[str] = []
-    runtime.pull_model("gemma4:12b", eventi.append)
+    events: list[str] = []
+    runtime.pull_model("gemma4:12b", events.append)
     assert runtime._available_models_cache is None
-    assert any("50%" in evento for evento in eventi)
-    assert sum("50%" in evento for evento in eventi) == 1
+    assert any("50%" in event for event in events)
+    assert sum("50%" in event for event in events) == 1
     http.stream.assert_called_once()
     runtime.close(unload=False)
 
 
-def _llm_con_stream(payloads: list[dict[str, object]]) -> StreamingOllamaLLM:
-    """Costruisce un wrapper che non parla con Ollama e emette i payload dati."""
+def _llm_with_stream(payloads: list[dict[str, object]]) -> StreamingOllamaLLM:
+    """Build a wrapper that does not talk to Ollama and emits the given payloads."""
     llm = StreamingOllamaLLM(
         model="x",
         validate_model_on_init=False,
@@ -244,8 +244,8 @@ def _llm_con_stream(payloads: list[dict[str, object]]) -> StreamingOllamaLLM:
     return llm
 
 
-def test_generate_params_non_inoltra_num_predict_a_client() -> None:
-    """num_predict vive in options, non come kwarg di Client.generate."""
+def test_generate_params_does_not_forward_num_predict_to_client() -> None:
+    """num_predict lives in options, not as a kwarg of Client.generate."""
     llm = StreamingOllamaLLM(
         model="x",
         validate_model_on_init=False,
@@ -258,26 +258,26 @@ def test_generate_params_non_inoltra_num_predict_a_client() -> None:
     assert params["options"]["num_batch"] == 512
 
 
-def test_stream_emette_reasoning_live_con_thinking_true() -> None:
-    """I token Ollama `thinking` arrivano al callback prima del testo."""
-    llm = _llm_con_stream(
+def test_stream_emits_live_reasoning_with_thinking_true() -> None:
+    """Ollama `thinking` tokens reach the callback before the text."""
+    llm = _llm_with_stream(
         [
             {"thinking": "perche", "response": ""},
             {"thinking": "", "response": "ok", "done": True},
         ]
     )
-    eventi: list[tuple[str, bool]] = []
+    events: list[tuple[str, bool]] = []
     manager = MagicMock()
     manager.on_llm_new_token.side_effect = (
-        lambda token, **kwargs: eventi.append((token, bool(kwargs.get("thinking"))))
+        lambda token, **kwargs: events.append((token, bool(kwargs.get("thinking"))))
     )
     chunks = list(llm._stream("prompt", run_manager=manager))
-    assert eventi == [("perche", True), ("ok", False)]
+    assert events == [("perche", True), ("ok", False)]
     assert chunks[-1].text == "ok"
 
 
-def test_stream_reasoning_false_promuove_thinking_a_testo() -> None:
-    """Senza CoT nativo i token `thinking` devono arrivare al parser ReAct."""
+def test_stream_reasoning_false_promotes_thinking_to_text() -> None:
+    """Without native CoT, `thinking` tokens must reach the ReAct parser."""
     llm = StreamingOllamaLLM(
         model="x",
         validate_model_on_init=False,
@@ -294,19 +294,19 @@ def test_stream_reasoning_false_promuove_thinking_a_testo() -> None:
             },
         ]
     )
-    eventi: list[tuple[str, bool]] = []
+    events: list[tuple[str, bool]] = []
     manager = MagicMock()
     manager.on_llm_new_token.side_effect = (
-        lambda token, **kwargs: eventi.append((token, bool(kwargs.get("thinking"))))
+        lambda token, **kwargs: events.append((token, bool(kwargs.get("thinking"))))
     )
     chunks = list(llm._stream("prompt", run_manager=manager))
-    assert any(not is_think for _token, is_think in eventi)
+    assert any(not is_think for _token, is_think in events)
     assert "scrivi_file" in "".join(chunk.text for chunk in chunks)
 
 
-def test_stream_thinking_esaurito_diventa_testo_react() -> None:
-    """Se il CoT nativo riempie num_predict, il parser ReAct riceve comunque il thinking."""
-    llm = _llm_con_stream(
+def test_stream_exhausted_thinking_becomes_react_text() -> None:
+    """If native CoT fills num_predict, the ReAct parser still receives the thinking."""
+    llm = _llm_with_stream(
         [
             {"thinking": "Thought: salvo.\nAction: scrivi_file\nAction Input: a.js\n---\nconsole.log(1)\n", "response": ""},
             {
@@ -318,19 +318,19 @@ def test_stream_thinking_esaurito_diventa_testo_react() -> None:
             },
         ]
     )
-    eventi: list[tuple[str, bool]] = []
+    events: list[tuple[str, bool]] = []
     manager = MagicMock()
     manager.on_llm_new_token.side_effect = (
-        lambda token, **kwargs: eventi.append((token, bool(kwargs.get("thinking"))))
+        lambda token, **kwargs: events.append((token, bool(kwargs.get("thinking"))))
     )
     final = llm._stream_with_aggregation("prompt", run_manager=manager)
-    assert all(is_think for _token, is_think in eventi)
+    assert all(is_think for _token, is_think in events)
     assert "Action: scrivi_file" in final.text
     assert "a.js" in final.text
 
 
-def test_as_stream_mapping_generate_response_senza_keys() -> None:
-    """I frame Ollama 0.33 sono Pydantic, non dict con `.keys()`."""
+def test_as_stream_mapping_generate_response_without_keys() -> None:
+    """Ollama 0.33 frames are Pydantic objects, not dicts with `.keys()`."""
 
     class _GenerateResponse:
         def __init__(self) -> None:
@@ -354,8 +354,8 @@ def test_as_stream_mapping_generate_response_senza_keys() -> None:
     assert "keys" not in dir(_GenerateResponse())
 
 
-def test_stream_done_generate_response_non_solleva() -> None:
-    """Il frame finale `done` non deve chiamare `.keys()` sul payload Ollama."""
+def test_stream_done_generate_response_does_not_raise() -> None:
+    """The final `done` frame must not call `.keys()` on the Ollama payload."""
 
     class _GenerateResponse:
         def get(self, key: str, default: object = None) -> object:
@@ -370,64 +370,64 @@ def test_stream_done_generate_response_non_solleva() -> None:
                 "done_reason": "stop",
             }
 
-    llm = _llm_con_stream([_GenerateResponse()])
+    llm = _llm_with_stream([_GenerateResponse()])
     chunks = list(llm._stream("prompt", run_manager=MagicMock()))
     assert chunks[-1].generation_info is not None
     assert chunks[-1].generation_info["done"] is True
 
 
-def test_aggregazione_react_emette_thinking_prima_del_contenuto() -> None:
-    """ReAct usa `_stream_with_aggregation`: il CoT deve comunque essere live."""
-    llm = _llm_con_stream(
+def test_react_aggregation_emits_thinking_before_content() -> None:
+    """ReAct uses `_stream_with_aggregation`: CoT must still be live."""
+    llm = _llm_with_stream(
         [
             {"thinking": "a", "response": ""},
             {"thinking": "b", "response": ""},
             {"response": "ciao", "done": True},
         ]
     )
-    ordine: list[str] = []
+    order: list[str] = []
     manager = MagicMock()
-    manager.on_llm_new_token.side_effect = lambda token, **kwargs: ordine.append(
+    manager.on_llm_new_token.side_effect = lambda token, **kwargs: order.append(
         "think" if kwargs.get("thinking") else "text"
     )
     final = llm._stream_with_aggregation("prompt", run_manager=manager)
-    assert ordine == ["think", "think", "text"]
+    assert order == ["think", "think", "text"]
     assert final.text == "ciao"
     assert final.generation_info is not None
     assert final.generation_info["thinking"] == "ab"
 
 
-def test_aggregazione_molti_chunk_thinking_senza_merge() -> None:
-    """Tanti token CoT non devono unire generation_info con `GenerationChunk +=`."""
+def test_aggregation_many_thinking_chunks_without_merge() -> None:
+    """Many CoT tokens must not merge generation_info with `GenerationChunk +=`."""
     payloads: list[dict[str, object]] = [
-        {"thinking": str(indice), "response": ""} for indice in range(50)
+        {"thinking": str(index), "response": ""} for index in range(50)
     ]
     payloads.append({"response": "fine", "done": True})
-    llm = _llm_con_stream(payloads)
+    llm = _llm_with_stream(payloads)
     final = llm._stream_with_aggregation("prompt", run_manager=MagicMock())
     assert final.text == "fine"
     assert final.generation_info is not None
-    assert final.generation_info["thinking"] == "".join(str(indice) for indice in range(50))
+    assert final.generation_info["thinking"] == "".join(str(index) for index in range(50))
 
 
-def test_diagnostica_server_env_segnala_flash_attention_spenta() -> None:
-    """Env del daemon senza FA produce un avviso con hint launchctl."""
-    from assistente.ollama_runtime import diagnostica_server_env
+def test_server_env_diagnostics_reports_flash_attention_off() -> None:
+    """A daemon env without FA produces a warning with a launchctl hint."""
+    from assistant.ollama_runtime import server_env_diagnostics
 
-    avviso = diagnostica_server_env(
+    warning = server_env_diagnostics(
         {"OLLAMA_FLASH_ATTENTION": "false", "OLLAMA_NUM_PARALLEL": "1"}
     )
-    assert avviso is not None
-    assert "FLASH_ATTENTION" in avviso
-    assert "launchctl setenv" in avviso
-    assert diagnostica_server_env(
+    assert warning is not None
+    assert "FLASH_ATTENTION" in warning
+    assert "launchctl setenv" in warning
+    assert server_env_diagnostics(
         {"OLLAMA_FLASH_ATTENTION": "1", "OLLAMA_NUM_PARALLEL": "1"}
     ) is None
 
 
-def test_preload_invia_num_ctx_e_opzioni_host() -> None:
-    """Il POST di preload allinea num_ctx/num_gpu al wrapper di sessione."""
-    from assistente.host import InferenceHostOptions
+def test_preload_sends_num_ctx_and_host_options() -> None:
+    """The preload POST aligns num_ctx/num_gpu with the session wrapper."""
+    from assistant.host import InferenceHostOptions
 
     http = MagicMock()
     http.post.return_value.raise_for_status.return_value = None
@@ -450,28 +450,28 @@ def test_preload_invia_num_ctx_e_opzioni_host() -> None:
         keep_alive="30m",
     )
     runtime.preload("default")
-    # /api/show (tetto del modello per la finestra di sessione), poi load e prefill.
+    # /api/show (model cap for the session window), then load and prefill.
     generate = [
         call.kwargs["json"]
         for call in http.post.call_args_list
         if call.args and call.args[0] == "/api/generate"
     ]
     assert len(generate) == 2
-    primo, secondo = generate
-    assert primo["options"]["num_gpu"] == -1
-    assert primo["options"]["num_thread"] == 4
-    assert primo["options"]["num_ctx"] >= 4096
-    assert secondo["options"]["num_predict"] == 1
-    assert secondo["prompt"]
+    first, second = generate
+    assert first["options"]["num_gpu"] == -1
+    assert first["options"]["num_thread"] == 4
+    assert first["options"]["num_ctx"] >= 4096
+    assert second["options"]["num_predict"] == 1
+    assert second["prompt"]
     runtime.close(unload=False)
 
 
-def test_preload_senza_residency_non_legge_pid_daemon(
+def test_preload_without_residency_does_not_read_daemon_pid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """I test con factory fake non pagano pgrep/ps sul daemon."""
+    """Tests with a fake factory do not pay for pgrep/ps on the daemon."""
     spy = MagicMock(return_value=None)
-    monkeypatch.setattr("assistente.ollama_runtime.pid_daemon_ollama", spy)
+    monkeypatch.setattr("assistant.ollama_runtime.pid_daemon_ollama", spy)
     http = MagicMock()
     http.post.return_value.raise_for_status.return_value = None
     runtime = OllamaRuntime(
@@ -484,11 +484,11 @@ def test_preload_senza_residency_non_legge_pid_daemon(
     runtime.close(unload=False)
 
 
-def test_preload_diagnostica_riusa_env_se_pid_invariato(
+def test_preload_diagnostics_reuses_env_if_pid_unchanged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Cambio PID ricalcola l'env; stesso PID salta ps/proc."""
-    from assistente.host import InferenceHostOptions
+    """A PID change recomputes the env; the same PID skips ps/proc."""
+    from assistant.host import InferenceHostOptions
 
     http = MagicMock()
     http.post.return_value.raise_for_status.return_value = None
@@ -498,8 +498,8 @@ def test_preload_diagnostica_riusa_env_se_pid_invariato(
     env_spy = MagicMock(
         return_value={"OLLAMA_FLASH_ATTENTION": "1", "OLLAMA_NUM_PARALLEL": "1"}
     )
-    monkeypatch.setattr("assistente.ollama_runtime.pid_daemon_ollama", pid_spy)
-    monkeypatch.setattr("assistente.ollama_runtime.environ_daemon_ollama", env_spy)
+    monkeypatch.setattr("assistant.ollama_runtime.pid_daemon_ollama", pid_spy)
+    monkeypatch.setattr("assistant.ollama_runtime.environ_daemon_ollama", env_spy)
     options = InferenceHostOptions(
         num_gpu=-1,
         num_thread=4,
@@ -527,8 +527,8 @@ def test_preload_diagnostica_riusa_env_se_pid_invariato(
 
 
 
-def test_descrivi_immagine_invia_base64_senza_thinking() -> None:
-    """La vision usa il modello della sessione: immagine base64, think spento."""
+def test_describe_image_sends_base64_without_thinking() -> None:
+    """Vision uses the session model: base64 image, think off."""
     import base64
 
     http = MagicMock()
@@ -539,8 +539,8 @@ def test_descrivi_immagine_invia_base64_senza_thinking() -> None:
         manage_residency=True,
     )
     runtime._available_models_cache = frozenset({"gemma4:12b"})
-    testo = runtime.descrivi_immagine("default", b"PNG", "coda.png")
-    assert testo == "Una balena."
+    text = runtime.describe_image("default", b"PNG", "coda.png")
+    assert text == "Una balena."
     body = http.post.call_args.kwargs["json"]
     assert body["model"] == "gemma4:12b"
     assert body["images"] == [base64.b64encode(b"PNG").decode("ascii")]
@@ -548,30 +548,30 @@ def test_descrivi_immagine_invia_base64_senza_thinking() -> None:
     runtime.close(unload=False)
 
 
-def test_descrivi_immagine_senza_risposta_e_documento_non_leggibile() -> None:
-    """Ollama assente: errore leggibile per il modello, non un crash del turno."""
-    from assistente.lettori import DocumentoNonLeggibile
+def test_describe_image_without_answer_is_unreadable_document() -> None:
+    """Ollama missing: a readable error for the model, not a turn crash."""
+    from assistant.readers import UnreadableDocument
 
     runtime = OllamaRuntime(llm_factory=_factory(), manage_residency=False)
-    with pytest.raises(DocumentoNonLeggibile, match="coda.png"):
-        runtime.descrivi_immagine("default", b"PNG", "coda.png")
+    with pytest.raises(UnreadableDocument, match="coda.png"):
+        runtime.describe_image("default", b"PNG", "coda.png")
     runtime.close(unload=False)
 
 
-def test_contesto_sessione_unico_per_tutte_le_route() -> None:
-    """Preload, scheda, direct, ReAct e riassunto chiedono lo stesso num_ctx: niente reload."""
-    from assistente.console import ConsoleUI
-    from assistente.host import HostCapabilities, InferenceHostOptions
-    from assistente.session import SessioneAgente
+def test_session_context_single_for_all_routes() -> None:
+    """Preload, card, direct, ReAct and summary ask for the same num_ctx: no reload."""
+    from assistant.console import ConsoleUI
+    from assistant.host import HostCapabilities, InferenceHostOptions
+    from assistant.session import AgentSession
 
-    memoria = 16 * 1024**3
+    memory = 16 * 1024**3
     host = HostCapabilities(
         os="darwin",
         arch="arm64",
         chip_family="m4",
         chip_brand="Apple M4",
-        memory_bytes=memoria,
-        inference_memory_bytes=memoria,
+        memory_bytes=memory,
+        inference_memory_bytes=memory,
         performance_cores=4,
         has_discrete_gpu=False,
         cooling="fanless_conservative",
@@ -591,10 +591,10 @@ def test_contesto_sessione_unico_per_tutte_le_route() -> None:
         host=host,
         host_options=options,
     )
-    sessione_ctx = runtime.contesto_sessione("default")
-    # q4_0 su 16 GB: la finestra di sessione sale già allo scalino espanso.
-    assert sessione_ctx == 8192
-    sessione = SessioneAgente(
+    session_ctx = runtime.session_context("default")
+    # q4_0 on 16 GB: the session window already rises to the expanded step.
+    assert session_ctx == 8192
+    session = AgentSession(
         MagicMock(spec=ConsoleUI),
         llm_factory=_factory(),
         ollama_runtime=runtime,
@@ -602,10 +602,10 @@ def test_contesto_sessione_unico_per_tutte_le_route() -> None:
     )
     try:
         for route in ("direct", "react"):
-            profilo, _storico = sessione._profilo_con_storico(
+            profile, _history = session._profile_with_history(
                 "default", route, None, "domanda breve", 128
             )
-            assert profilo.context_tokens == sessione_ctx
+            assert profile.context_tokens == session_ctx
     finally:
-        sessione.close()
+        session.close()
         runtime.close(unload=False)
