@@ -1,0 +1,12 @@
+{
+  "_note": "allow and deny govern writes (write/replace/mkdir). deny alone also applies to reads and listings (read/list/tree/find/search): denied paths are unreadable and invisible, and denying a folder covers its content. allow does not widen reads: it is a write perimeter. This _note key is ignored by the loader.",
+  "allow": [],
+  "deny": [
+    ".env",
+    ".env.*",
+    "**/.env",
+    "**/.env.*",
+    "**/credentials.json",
+    "**/secrets.*"
+  ]
+}

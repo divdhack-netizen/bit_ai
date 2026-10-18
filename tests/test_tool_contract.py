@@ -1,4 +1,4 @@
-"""Test unitari per tool_contract, evaluate_turn, permissions e microcompact."""
+"""Unit tests for tool_contract, evaluate_turn, permissions and microcompact."""
 
 from __future__ import annotations
 
@@ -6,24 +6,24 @@ from pathlib import Path
 
 import pytest
 
-from assistente.evaluate_turn import evaluate_turn
-from assistente.file_service import WorkspaceFileService
-from assistente.permissions import WritePermissionRules, load_write_permission_rules
-from assistente.prompt_budget import microcompact_observations
-from assistente.tool_contract import (
+from assistant.evaluate_turn import evaluate_turn
+from assistant.file_service import WorkspaceFileService
+from assistant.permissions import WritePermissionRules, load_write_permission_rules
+from assistant.prompt_budget import microcompact_observations
+from assistant.tool_contract import (
     ToolContract,
     get_tool_contract,
     validate_non_empty,
     wrap_tool_func,
 )
-from assistente.tools import crea_tool_file
-from assistente.config import FileConfig
+from assistant.tools import create_file_tools
+from assistant.config import FileConfig
 
 pytestmark = pytest.mark.unit
 
 
 def test_wrap_tool_func_validation_error() -> None:
-    """Input vuoto su validate_non_empty → Observation di errore, no side effect."""
+    """Empty input on validate_non_empty → error Observation, no side effect."""
     calls: list[str] = []
 
     def impl(action_input: str) -> str:
@@ -42,13 +42,13 @@ def test_wrap_tool_func_validation_error() -> None:
     assert calls == []
 
 
-def test_crea_tool_file_annota_contratti(tmp_path: Path) -> None:
-    """I tool file espongono tool_contract con flag RO corretti."""
+def test_create_file_tools_annotates_contracts(tmp_path: Path) -> None:
+    """The file tools expose tool_contract with the correct read-only flags."""
     service = WorkspaceFileService(
         FileConfig(workspace=tmp_path),
         permission_rules=WritePermissionRules(),
     )
-    tools = crea_tool_file(service, write_allowed=True, workspace_label="ws")
+    tools = create_file_tools(service, write_allowed=True, workspace_label="ws")
     by_name = {tool.name: tool for tool in tools}
     write_contract = get_tool_contract(by_name["scrivi_file"])
     modify_contract = get_tool_contract(by_name["modifica_file"])
@@ -68,13 +68,13 @@ def test_crea_tool_file_annota_contratti(tmp_path: Path) -> None:
     assert get_tool_contract(by_name["elenca_albero"]).is_read_only is True
 
 
-def test_crea_tool_file_omette_write_se_gate_chiuso(tmp_path: Path) -> None:
-    """Gate False: niente scrivi_file/modifica_file nel prompt ReAct."""
+def test_create_file_tools_omits_write_if_gate_closed(tmp_path: Path) -> None:
+    """Gate False: no scrivi_file/modifica_file in the ReAct prompt."""
     service = WorkspaceFileService(
         FileConfig(workspace=tmp_path),
         permission_rules=WritePermissionRules(),
     )
-    tools = crea_tool_file(service, write_allowed=False, workspace_label="ws")
+    tools = create_file_tools(service, write_allowed=False, workspace_label="ws")
     names = {tool.name for tool in tools}
     assert names == {
         "leggi_documento",
@@ -85,53 +85,53 @@ def test_crea_tool_file_omette_write_se_gate_chiuso(tmp_path: Path) -> None:
     }
 
 
-def test_evaluate_turn_scrittura_mancante() -> None:
-    """Scrittura richiesta senza path → incompleto con nota esplicita."""
-    esito = evaluate_turn(
+def test_evaluate_turn_missing_write() -> None:
+    """Write requested without a path → incomplete with an explicit note."""
+    outcome = evaluate_turn(
         "Ho creato hello.py",
-        scrittura_richiesta=True,
-        path_scritti=[],
+        write_requested=True,
+        written_paths=[],
     )
-    assert esito.incompleto is True
-    assert "nessun file" in esito.risposta.casefold() or "persistito" in esito.risposta.casefold()
+    assert outcome.incomplete is True
+    assert "nessun file" in outcome.answer.casefold() or "persistito" in outcome.answer.casefold()
 
 
 def test_evaluate_turn_ok() -> None:
-    """Turno chat senza scrittura → completo."""
-    esito = evaluate_turn(
+    """Chat turn without a write → complete."""
+    outcome = evaluate_turn(
         "Una closure cattura variabili",
-        scrittura_richiesta=False,
-        path_scritti=[],
+        write_requested=False,
+        written_paths=[],
     )
-    assert esito.incompleto is False
-    assert esito.risposta == "Una closure cattura variabili"
+    assert outcome.incomplete is False
+    assert outcome.answer == "Una closure cattura variabili"
 
 
-def test_evaluate_turn_senza_intento_non_segnala_la_scrittura() -> None:
-    """La route ReAct autorizza i tool, ma non implica una scrittura voluta."""
-    esito = evaluate_turn(
+def test_evaluate_turn_without_intent_does_not_report_write() -> None:
+    """The ReAct route enables the tools but does not imply a wanted write."""
+    outcome = evaluate_turn(
         "Agent stopped due to iteration limit",
-        scrittura_richiesta=False,
-        path_scritti=[],
+        write_requested=False,
+        written_paths=[],
         max_iterations_hit=True,
     )
-    assert esito.incompleto is True
-    assert all("Scrittura richiesta" not in nota for nota in esito.note)
-    assert any("limite iterazioni" in nota for nota in esito.note)
+    assert outcome.incomplete is True
+    assert all("Scrittura richiesta" not in note for note in outcome.note)
+    assert any("limite iterazioni" in note for note in outcome.note)
 
 
-def test_evaluate_turn_mkdir_non_e_scrittura_mancante() -> None:
-    """Una cartella persistita chiude il gate scrittura."""
-    esito = evaluate_turn(
+def test_evaluate_turn_mkdir_is_not_missing_write() -> None:
+    """A persisted folder closes the write gate."""
+    outcome = evaluate_turn(
         "Ho creato notes",
-        scrittura_richiesta=True,
-        path_scritti=["notes"],
+        write_requested=True,
+        written_paths=["notes"],
     )
-    assert esito.incompleto is False
+    assert outcome.incomplete is False
 
 
 def test_permission_deny_blocks_write(tmp_path: Path) -> None:
-    """Deny glob su secrets.* rifiuta la scrittura anche con gate aperto."""
+    """A deny glob on secrets.* rejects the write even with the gate open."""
     service = WorkspaceFileService(
         FileConfig(workspace=tmp_path),
         permission_rules=WritePermissionRules(deny=("secrets.*",)),
@@ -144,7 +144,7 @@ def test_permission_deny_blocks_write(tmp_path: Path) -> None:
 
 
 def test_load_write_permission_rules_missing(tmp_path: Path) -> None:
-    """File assente → regole vuote (allow-all sopra sandbox)."""
+    """Missing file → empty rules (allow-all on top of the sandbox)."""
     rules = load_write_permission_rules(tmp_path / "missing.json")
     assert rules.allow == ()
     assert rules.deny == ()
@@ -152,7 +152,7 @@ def test_load_write_permission_rules_missing(tmp_path: Path) -> None:
 
 
 def test_file_read_cache_hit(tmp_path: Path) -> None:
-    """Seconda lettura dello stesso file riusa la cache di sessione."""
+    """A second read of the same file reuses the session cache."""
     service = WorkspaceFileService(
         FileConfig(workspace=tmp_path),
         permission_rules=WritePermissionRules(),
@@ -163,15 +163,15 @@ def test_file_read_cache_hit(tmp_path: Path) -> None:
     second = service.read_document("note.txt")
     assert first.succeeded and second.succeeded
     assert first.content == second.content == "hello cache"
-    # Dopo write, la cache del path viene invalidata.
+    # After a write, the path's cache is invalidated.
     service.begin_turn(True)
     service.write_text("note.txt", "updated\n")
     third = service.read_document("note.txt")
     assert third.content == "updated\n"
 
 
-def test_permission_deny_copre_dotfile_root_e_glob_radice() -> None:
-    """Prima lstrip('./') esentava i dotfile e **/X non copriva la radice."""
+def test_permission_deny_covers_root_dotfile_and_root_glob() -> None:
+    """lstrip('./') used to exempt dotfiles and **/X did not cover the root."""
     rules = WritePermissionRules(
         deny=(".env", ".env.*", "**/.env", "**/credentials.json", "**/secrets.*"),
     )
@@ -179,21 +179,21 @@ def test_permission_deny_copre_dotfile_root_e_glob_radice() -> None:
         allowed, reason = rules.is_write_allowed(path)
         assert allowed is False, path
         assert reason is not None and "negato" in reason
-    # I path normali restano liberi con allow vuoto.
+    # Normal paths stay free with an empty allow list.
     assert rules.is_write_allowed("notes/a.md") == (True, None)
 
 
-def test_permission_is_read_allowed_usa_solo_deny() -> None:
-    """La deny blocca anche la lettura; allow restringe le scritture, non amplia le letture."""
+def test_permission_is_read_allowed_uses_only_deny() -> None:
+    """Deny also blocks reads; allow restricts writes, it does not widen reads."""
     rules = WritePermissionRules(allow=("pub/*",), deny=("secrets.*",))
     assert rules.is_read_allowed("secrets.env")[0] is False
-    # Fuori dall'allow ma leggibile: allow non è una whitelist di lettura.
+    # Outside the allow list but readable: allow is not a read whitelist.
     assert rules.is_read_allowed("altro/file.md") == (True, None)
     assert rules.is_read_allowed("pub/x.md") == (True, None)
 
 
-def test_permission_deny_cartella_copre_i_figli() -> None:
-    """Negare la cartella nega anche il contenuto, senza glob «**»."""
+def test_permission_deny_folder_covers_children() -> None:
+    """Denying the folder denies its content too, without a «**» glob."""
     rules = WritePermissionRules(deny=("privato",))
     assert rules.is_read_allowed("privato/chiavi.txt")[0] is False
     assert rules.is_write_allowed("privato/chiavi.txt")[0] is False
@@ -201,7 +201,7 @@ def test_permission_deny_cartella_copre_i_figli() -> None:
 
 
 def test_permission_deny_blocks_read(tmp_path: Path) -> None:
-    """Il segreto negato è illeggibile anche se esiste sul disco (R5)."""
+    """The denied secret is unreadable even if it exists on disk (R5)."""
     (tmp_path / "secrets.env").write_text("TOKEN=1\n", encoding="utf-8")
     (tmp_path / "note.txt").write_text("ciao\n", encoding="utf-8")
     service = WorkspaceFileService(
@@ -212,12 +212,12 @@ def test_permission_deny_blocks_read(tmp_path: Path) -> None:
     assert denied.succeeded is False
     assert denied.content == ""
     assert "Lettura non consentita" in str(denied.error)
-    # I path puliti restano leggibili.
+    # Clean paths stay readable.
     assert service.read_document("note.txt").succeeded is True
 
 
-def test_microcompact_omette_observation_vecchie() -> None:
-    """Observation RO vecchie diventano placeholder; errori e write restano."""
+def test_microcompact_omits_old_observations() -> None:
+    """Old read-only Observations become placeholders; errors and writes stay."""
     observations = [
         ("leggi_documento", "a.py", "contenuto lungo " * 50),
         ("elenca_cartella", ".", "file1\nfile2"),
@@ -229,5 +229,5 @@ def test_microcompact_omette_observation_vecchie() -> None:
     assert "omessa" in compacted[0][2]
     assert "File scritto" in compacted[2][2]
     assert "File modificato" in compacted[3][2]
-    # L'ultima resta intatta (keep_recent=1).
+    # The last one stays intact (keep_recent=1).
     assert compacted[-1][2] == "nuovo contenuto"

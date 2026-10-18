@@ -1,4 +1,4 @@
-"""Benchmark ripetibile di Ollama raw e dell'agente closed-corpus (direct/ReAct)."""
+"""Repeatable benchmark of raw Ollama and the closed-corpus agent (direct/ReAct)."""
 
 from __future__ import annotations
 
@@ -17,19 +17,19 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
-from assistente.config import WORKSPACE
-from assistente.host import detect_power
-from assistente.inference_profiles import (
+from assistant.config import WORKSPACE
+from assistant.host import detect_power
+from assistant.inference_profiles import (
     InferenceRoute,
     physical_memory_bytes,
     profile_for_route,
     resolve_model_variant,
 )
-from assistente.metriche import stima_token_da_testo
-from assistente.thermal import (
-    invalida_cache_termica,
-    leggi_stato_termico,
-    leggi_temperatura_cpu_celsius,
+from assistant.metrics import estimate_tokens_from_text
+from assistant.thermal import (
+    invalidate_thermal_cache,
+    read_thermal_state,
+    read_cpu_temperature_celsius,
 )
 
 ModeName = Literal["ollama_raw", "agent_no_ui", "agent_rich"]
@@ -66,23 +66,23 @@ _LONG_CONTEXT_TOLERANCE = 0.25
 @dataclass(frozen=True, slots=True)
 class BenchmarkCase:
     """
-    Caso funzionale con rubrica di qualità deterministica.
+    Functional case with a deterministic quality rubric.
 
     Attributes:
-        name: Chiave CLI del caso.
-        prompt: Richiesta inviata al modello o all'agente.
-        route: Route usata per il profilo token (num_ctx/num_predict).
-        contains_all: Frammenti che devono comparire tutti (case-insensitive).
-        contains_any: Almeno uno di questi frammenti deve comparire.
-        forbidden: Frammenti che non devono comparire.
-        min_chars: Lunghezza minima della risposta.
-        max_chars: Lunghezza massima; None = nessun limite.
-        max_llm_calls: Tetto di generazioni LLM per il turno agente.
-        functional_check: Nome del controllo eseguibile registrato in `_FUNCTIONAL_CHECKS`.
-        history: Scambi pregressi (utente, assistente) da inserire nello storico.
-        setup_files: File (path relativo, contenuto) creati prima del caso.
-        cleanup_files: File rimossi prima del caso per rendere genuino il check.
-        raw_capable: False se il caso ha senso solo con l'agente.
+        name: CLI key of the case.
+        prompt: Request sent to the model or the agent.
+        route: Route used for the token profile (num_ctx/num_predict).
+        contains_all: Fragments that must all appear (case-insensitive).
+        contains_any: At least one of these fragments must appear.
+        forbidden: Fragments that must not appear.
+        min_chars: Minimum answer length.
+        max_chars: Maximum length; None = no limit.
+        max_llm_calls: Cap on LLM generations for the agent turn.
+        functional_check: Name of the executable check registered in `_FUNCTIONAL_CHECKS`.
+        history: Previous (user, assistant) exchanges to put into the history.
+        setup_files: Files (relative path, content) created before the case.
+        cleanup_files: Files removed before the case so the check is genuine.
+        raw_capable: False if the case only makes sense with the agent.
     """
 
     name: str
@@ -262,16 +262,16 @@ _CASES: dict[str, BenchmarkCase] = {
 
 
 @dataclass(frozen=True, slots=True)
-class ContestoCheck:
-    """Dati disponibili ai controlli funzionali."""
+class CheckContext:
+    """Data available to the functional checks."""
 
     answer: str
     workspace: Path
 
 
 @dataclass(frozen=True, slots=True)
-class EsitoQualita:
-    """Verdetto della rubrica con i motivi di fallimento."""
+class QualityOutcome:
+    """Rubric verdict with the failure reasons."""
 
     passed: bool
     failures: tuple[str, ...]
@@ -279,7 +279,7 @@ class EsitoQualita:
 
 @dataclass(frozen=True, slots=True)
 class BenchmarkCaseResult:
-    """Esito di una singola misurazione confrontabile via JSON."""
+    """Outcome of a single measurement, comparable via JSON."""
 
     case: str
     mode: str
@@ -320,7 +320,7 @@ class BenchmarkCaseResult:
 
 @dataclass(frozen=True, slots=True)
 class BenchmarkSuiteReport:
-    """Report aggregato della matrice eseguita."""
+    """Aggregate report of the executed matrix."""
 
     machine: dict[str, Any]
     results: list[BenchmarkCaseResult]
@@ -328,27 +328,27 @@ class BenchmarkSuiteReport:
 
 
 # ---------------------------------------------------------------------------
-# Rubrica di qualità
+# Quality rubric
 # ---------------------------------------------------------------------------
 
 _FENCED_PYTHON = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
-_NUMERI = re.compile(r"\d+")
-_INIZIO_CODICE = re.compile(r"^(?:def |import |from |class )", re.MULTILINE)
+_NUMBERS = re.compile(r"\d+")
+_CODE_START = re.compile(r"^(?:def |import |from |class )", re.MULTILINE)
 
 
-def _estrai_codice_python(answer: str) -> str:
-    """Restituisce il codice Python contenuto nella risposta, con o senza fence."""
+def _extract_python_code(answer: str) -> str:
+    """Return the Python code contained in the answer, with or without a fence."""
     blocks = _FENCED_PYTHON.findall(answer)
     if blocks:
         return "\n\n".join(block.strip() for block in blocks)
-    match = _INIZIO_CODICE.search(answer)
+    match = _CODE_START.search(answer)
     if match is None:
         return answer
     return answer[match.start() :]
 
 
-def _esegui_codice_isolato(code: str, asserts: str) -> str | None:
-    """Esegue codice generato in un interprete separato; None se gli assert passano."""
+def _run_isolated_code(code: str, asserts: str) -> str | None:
+    """Run generated code in a separate interpreter; None if the asserts pass."""
     script = f"{code}\n\n{asserts}\n"
     try:
         completed = subprocess.run(
@@ -366,25 +366,25 @@ def _esegui_codice_isolato(code: str, asserts: str) -> str | None:
     return f"codice: {stderr_tail[0][:160]}"
 
 
-def _check_clamp(ctx: ContestoCheck) -> str | None:
+def _check_clamp(ctx: CheckContext) -> str | None:
     asserts = (
         "assert clamp(5, 0, 3) == 3\n"
         "assert clamp(-1, 0, 3) == 0\n"
         "assert clamp(2, 0, 3) == 2\n"
     )
-    return _esegui_codice_isolato(_estrai_codice_python(ctx.answer), asserts)
+    return _run_isolated_code(_extract_python_code(ctx.answer), asserts)
 
 
-def _check_media_bugfix(ctx: ContestoCheck) -> str | None:
+def _check_average_bugfix(ctx: CheckContext) -> str | None:
     asserts = (
         "assert media([]) == 0.0\n"
         "assert media([2, 4]) == 3.0\n"
         "assert media([5]) == 5.0\n"
     )
-    return _esegui_codice_isolato(_estrai_codice_python(ctx.answer), asserts)
+    return _run_isolated_code(_extract_python_code(ctx.answer), asserts)
 
 
-def _check_file_hello(ctx: ContestoCheck) -> str | None:
+def _check_file_hello(ctx: CheckContext) -> str | None:
     target = ctx.workspace / _HELLO_BENCHMARK_PATH
     if not target.exists():
         return f"file: {_HELLO_BENCHMARK_PATH} non creato"
@@ -394,7 +394,7 @@ def _check_file_hello(ctx: ContestoCheck) -> str | None:
     return None
 
 
-def _check_file_notes(ctx: ContestoCheck) -> str | None:
+def _check_file_notes(ctx: CheckContext) -> str | None:
     folder = ctx.workspace / _NOTES_DIR_BENCHMARK_PATH
     target = ctx.workspace / _NOTES_FILE_BENCHMARK_PATH
     if not folder.is_dir():
@@ -407,8 +407,8 @@ def _check_file_notes(ctx: ContestoCheck) -> str | None:
     return None
 
 
-def _check_conteggio_contesto(ctx: ContestoCheck) -> str | None:
-    numbers = [int(raw) for raw in _NUMERI.findall(ctx.answer)]
+def _check_context_count(ctx: CheckContext) -> str | None:
+    numbers = [int(raw) for raw in _NUMBERS.findall(ctx.answer)]
     if not numbers:
         return "conteggio: nessun numero nella risposta"
     low = _LONG_CONTEXT_EXPECTED * (1 - _LONG_CONTEXT_TOLERANCE)
@@ -418,47 +418,47 @@ def _check_conteggio_contesto(ctx: ContestoCheck) -> str | None:
     return f"conteggio: {numbers[:3]} fuori da [{low:.0f}, {high:.0f}]"
 
 
-_FUNCTIONAL_CHECKS: dict[str, Callable[[ContestoCheck], str | None]] = {
+_FUNCTIONAL_CHECKS: dict[str, Callable[[CheckContext], str | None]] = {
     "clamp": _check_clamp,
-    "media_bugfix": _check_media_bugfix,
+    "media_bugfix": _check_average_bugfix,
     "file_hello": _check_file_hello,
     "file_notes": _check_file_notes,
-    "conteggio_contesto": _check_conteggio_contesto,
+    "conteggio_contesto": _check_context_count,
 }
 
 
-def _contiene_tutti(answer: str, fragments: tuple[str, ...] | list[str]) -> bool:
+def _contains_all(answer: str, fragments: tuple[str, ...] | list[str]) -> bool:
     haystack = answer.casefold()
     return all(fragment.casefold() in haystack for fragment in fragments)
 
 
 def _quality_pass(answer: str, contains: list[str]) -> bool:
-    """Controllo congiuntivo case-insensitive; senza vincoli basta una risposta non vuota."""
+    """Case-insensitive conjunctive check; without constraints a non-empty answer is enough."""
     if not contains:
         return bool(answer.strip())
-    return _contiene_tutti(answer, contains)
+    return _contains_all(answer, contains)
 
 
-def valuta_qualita(
+def evaluate_quality(
     case: BenchmarkCase,
     answer: str,
     *,
     llm_calls: int = 0,
     workspace: Path = WORKSPACE,
     check_llm_calls: bool = True,
-) -> EsitoQualita:
+) -> QualityOutcome:
     """
-    Applica l'intera rubrica del caso alla risposta.
+    Apply the case's whole rubric to the answer.
 
     Args:
-        case: Caso con rubrica dichiarativa.
-        answer: Testo finale prodotto.
-        llm_calls: Generazioni LLM contate dal callback (solo agente).
-        workspace: Radice per i check su file.
-        check_llm_calls: False per il percorso raw, dove il conteggio non esiste.
+        case: Case with a declarative rubric.
+        answer: Final text produced.
+        llm_calls: LLM generations counted by the callback (agent only).
+        workspace: Root for the file checks.
+        check_llm_calls: False for the raw path, where the count does not exist.
 
     Returns:
-        Esito con elenco dei vincoli violati.
+        Outcome with the list of violated constraints.
     """
     failures: list[str] = []
     text = answer.strip()
@@ -481,14 +481,14 @@ def valuta_qualita(
         failures.append(f"llm_calls: {llm_calls} > {case.max_llm_calls}")
     if case.functional_check is not None:
         check = _FUNCTIONAL_CHECKS[case.functional_check]
-        failure = check(ContestoCheck(text, workspace))
+        failure = check(CheckContext(text, workspace))
         if failure is not None:
             failures.append(failure)
-    return EsitoQualita(passed=not failures, failures=tuple(failures))
+    return QualityOutcome(passed=not failures, failures=tuple(failures))
 
 
 # ---------------------------------------------------------------------------
-# Misure
+# Measurements
 # ---------------------------------------------------------------------------
 
 
@@ -499,7 +499,7 @@ def _http_json(
     *,
     timeout: float = HTTP_TIMEOUT_SECONDS,
 ) -> Any:
-    """Richiesta JSON verso Ollama con la sola standard library."""
+    """JSON request to Ollama using only the standard library."""
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         url,
@@ -547,12 +547,12 @@ def _unload_best_effort(base_url: str, tag: str) -> None:
             timeout=60.0,
         )
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
-        # L'unload best-effort non deve bloccare la misura successiva.
+        # The best-effort unload must not block the next measurement.
         pass
 
 
 def _warm_up(base_url: str, tag: str, context_tokens: int) -> float:
-    """Carica i pesi con una generazione minima; restituisce il load in ms (0 se fallisce)."""
+    """Load the weights with a minimal generation; return the load time in ms (0 on failure)."""
     try:
         payload = _http_json(
             "POST",
@@ -587,30 +587,30 @@ def measure_ollama_raw(
     case: BenchmarkCase | None = None,
 ) -> BenchmarkCaseResult:
     """
-    Misura una generazione `/api/generate` senza UI né agente.
+    Measure a `/api/generate` generation with no UI and no agent.
 
     Args:
-        tag: Tag Ollama esplicito.
-        prompt: Testo inviato al modello.
+        tag: Explicit Ollama tag.
+        prompt: Text sent to the model.
         context_tokens: `num_ctx`.
         output_tokens: `num_predict`.
-        base_url: Endpoint Ollama.
-        keep_alive: Residenza richiesta.
-        cold: Se True tenta unload prima della misura.
-        contains: Frammenti richiesti quando non si passa un caso completo.
-        think: CoT nativo.
-        extra_options: Opzioni Ollama aggiuntive (A/B di num_thread, num_batch, ...).
-        case: Caso con rubrica completa; ha priorità su `contains`.
+        base_url: Ollama endpoint.
+        keep_alive: Requested residency.
+        cold: If True, try to unload before measuring.
+        contains: Required fragments when no full case is passed.
+        think: Native CoT.
+        extra_options: Additional Ollama options (A/B of num_thread, num_batch, ...).
+        case: Case with a full rubric; takes priority over `contains`.
 
     Returns:
-        Risultato con metriche load/prefill/decode/TTFT native.
+        Result with native load/prefill/decode/TTFT metrics.
     """
     if cold:
         _unload_best_effort(base_url, tag)
 
-    invalida_cache_termica()
-    thermal_before = int(leggi_stato_termico())
-    temp_before = leggi_temperatura_cpu_celsius()
+    invalidate_thermal_cache()
+    thermal_before = int(read_thermal_state())
+    temp_before = read_cpu_temperature_celsius()
     options: dict[str, Any] = {
         "temperature": RAW_TEMPERATURE,
         "num_ctx": context_tokens,
@@ -656,7 +656,7 @@ def measure_ollama_raw(
                     thinking_parts.append(thought)
                 if chunk.get("done"):
                     final_info = chunk
-    except Exception as exc:  # noqa: BLE001 — il report deve catturare ogni fallimento
+    except Exception as exc:  # noqa: BLE001 — the report must capture every failure
         error = f"{type(exc).__name__}: {exc}"
 
     total_ms = (time.perf_counter() - started) * 1000.0
@@ -670,9 +670,9 @@ def measure_ollama_raw(
     power = detect_power()
     ok = error is None and bool(answer.strip())
     if case is not None:
-        quality = valuta_qualita(case, answer, check_llm_calls=False)
+        quality = evaluate_quality(case, answer, check_llm_calls=False)
     else:
-        quality = EsitoQualita(
+        quality = QualityOutcome(
             passed=_quality_pass(answer, list(contains or [])),
             failures=(),
         )
@@ -702,7 +702,7 @@ def measure_ollama_raw(
         answer_preview=answer[:ANSWER_PREVIEW_CHARS],
         notes=[f"answer_chars={len(answer)}", f"thinking_chars={len(thinking_text)}"],
         think=think,
-        thinking_tokens=stima_token_da_testo(thinking_text),
+        thinking_tokens=estimate_tokens_from_text(thinking_text),
         on_battery=power.on_battery,
         low_power_mode=power.low_power_mode,
         route=case.route if case else "",
@@ -711,14 +711,14 @@ def measure_ollama_raw(
     )
 
 
-class SessioneBenchmark:
-    """Sessione agente riusata tra casi: evita unload/reload dei pesi a ogni misura."""
+class BenchmarkSession:
+    """Agent session reused across cases: avoids unloading/reloading the weights on every measurement."""
 
     def __init__(self, alias: str, mode: ModeName) -> None:
         from unittest.mock import MagicMock
 
-        from assistente.console import ConsoleUI
-        from assistente.session import SessioneAgente
+        from assistant.console import ConsoleUI
+        from assistant.session import AgentSession
 
         self.alias = alias
         self.mode = mode
@@ -727,16 +727,16 @@ class SessioneBenchmark:
         else:
             self.ui = MagicMock(spec=ConsoleUI)
             self.ui.console = MagicMock()
-            self.ui.barra_termica = MagicMock()
-            self.ui.ha_stream_live = False
-            self.ui.conteggio_refresh_stream = 0
-        self.session = SessioneAgente(self.ui)
+            self.ui.thermal_bar = MagicMock()
+            self.ui.has_live_stream = False
+            self.ui.stream_refresh_count = 0
+        self.session = AgentSession(self.ui)
 
-    def prepara_caso(self, case: BenchmarkCase) -> None:
-        """Ripristina storico, contatori e file del workspace per il caso."""
-        self.session.svuota_memoria()
-        for utente, assistente in case.history:
-            self.session.registra_turno_storico(utente, assistente)
+    def prepare_case(self, case: BenchmarkCase) -> None:
+        """Restore history, counters and workspace files for the case."""
+        self.session.clear_memory()
+        for user, assistant in case.history:
+            self.session.record_history_turn(user, assistant)
         for relative_path in case.cleanup_files:
             target = self.session.workspace / relative_path
             if target.exists():
@@ -746,8 +746,8 @@ class SessioneBenchmark:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
 
-    def scarica_modello(self) -> None:
-        self.session.scarica_pesi_attivi()
+    def download_model(self) -> None:
+        self.session.unload_active_weights()
 
     def close(self) -> None:
         self.session.close()
@@ -756,63 +756,63 @@ class SessioneBenchmark:
 def measure_agent_case(
     *,
     case: BenchmarkCase,
-    bench_session: SessioneBenchmark,
+    bench_session: BenchmarkSession,
     cold: bool = False,
     repeat_index: int = 0,
 ) -> BenchmarkCaseResult:
     """
-    Esegue un caso dell'agente sulla sessione riusata.
+    Run an agent case on the reused session.
 
     Args:
-        case: Caso con prompt e rubrica.
-        bench_session: Sessione già costruita per alias e modalità.
-        cold: Se True scarica i pesi prima del turno.
-        repeat_index: Progressivo della ripetizione (0 = prima misura).
+        case: Case with prompt and rubric.
+        bench_session: Session already built for alias and mode.
+        cold: If True, unload the weights before the turn.
+        repeat_index: Ordinal of the repetition (0 = first measurement).
 
     Returns:
-        Risultato con metriche end-to-end e verdetto qualità.
+        Result with end-to-end metrics and the quality verdict.
     """
-    from assistente.config import ConfigRuntime
+    from assistant.config import ConfigRuntime
 
     alias = bench_session.alias
     profile = profile_for_route(alias, case.route)
     config = ConfigRuntime(
         verbose=False,
-        verifica_completa=False,
+        full_verification=False,
         burn_protection=False,
-        modello=alias,
+        model=alias,
         thinking=False,
         auto_fast_low_power=False,
     )
-    bench_session.prepara_caso(case)
+    bench_session.prepare_case(case)
     if cold:
-        bench_session.scarica_modello()
+        bench_session.download_model()
 
-    invalida_cache_termica()
-    thermal_before = int(leggi_stato_termico())
-    temp_before = leggi_temperatura_cpu_celsius()
+    invalidate_thermal_cache()
+    thermal_before = int(read_thermal_state())
+    temp_before = read_cpu_temperature_celsius()
     session = bench_session.session
     started = time.perf_counter()
     error: str | None = None
     answer = ""
     try:
-        answer, _paths = session.esegui_richiesta(case.prompt, config)
+        answer, _paths = session.run_request(case.prompt, config)
     except Exception as exc:  # noqa: BLE001
         error = f"{type(exc).__name__}: {exc}"
     total_ms = (time.perf_counter() - started) * 1000.0
-    metriche = session.ultime_metriche()
-    metriche_dict = metriche.as_dict() if metriche is not None else {}
-    llm_calls = int(metriche_dict.get("chiamate_llm", 0))
-    quality = valuta_qualita(
+    metrics = session.last_metrics()
+    metrics_dict = metrics.as_dict() if metrics is not None else {}
+    llm_calls = int(metrics_dict.get("chiamate_llm", 0))
+    quality = evaluate_quality(
         case,
         str(answer),
         llm_calls=llm_calls,
         workspace=session.workspace,
     )
-    ui_updates = int(getattr(bench_session.ui, "conteggio_refresh_stream", 0) or 0)
+    ui_updates = int(getattr(bench_session.ui, "stream_refresh_count", 0) or 0)
     power = detect_power()
-    prompt_tokens = int(metriche_dict.get("token_input", 0))
-    prefill_ms = float(metriche_dict.get("durata_prefill_ms", 0.0))
+    prompt_tokens = int(metrics_dict.get("token_input", 0))
+    prefill_ms = float(metrics_dict.get("durata_prefill_ms", 0.0))
     ok = error is None and bool(str(answer).strip())
 
     return BenchmarkCaseResult(
@@ -827,19 +827,19 @@ def measure_agent_case(
         ok=ok,
         quality_pass=ok and quality.passed,
         error=error,
-        load_ms=float(metriche_dict.get("durata_load_ms", 0.0)),
+        load_ms=float(metrics_dict.get("durata_load_ms", 0.0)),
         prefill_ms=prefill_ms,
         decode_ms=max(
             0.0,
-            float(metriche_dict.get("durata_llm_ms", 0.0))
-            - float(metriche_dict.get("ttft_ms", 0.0)),
+            float(metrics_dict.get("durata_llm_ms", 0.0))
+            - float(metrics_dict.get("ttft_ms", 0.0)),
         ),
-        ttft_ms=float(metriche_dict.get("ttft_ms", 0.0)),
+        ttft_ms=float(metrics_dict.get("ttft_ms", 0.0)),
         total_ms=total_ms,
         prompt_tokens=prompt_tokens,
-        output_tokens_count=int(metriche_dict.get("token_output", 0)),
+        output_tokens_count=int(metrics_dict.get("token_output", 0)),
         prompt_tokens_per_s=_rate_ms(prompt_tokens, prefill_ms),
-        decode_tokens_per_s=float(metriche_dict.get("token_al_secondo", 0.0)),
+        decode_tokens_per_s=float(metrics_dict.get("token_al_secondo", 0.0)),
         thermal_state=thermal_before,
         temp_celsius=temp_before,
         ui_updates=ui_updates,
@@ -849,8 +849,8 @@ def measure_agent_case(
         low_power_mode=power.low_power_mode,
         route=case.route,
         llm_calls=llm_calls,
-        tool_ms=float(metriche_dict.get("durata_tool_ms", 0.0)),
-        rendering_ms=float(metriche_dict.get("durata_rendering_ms", 0.0)),
+        tool_ms=float(metrics_dict.get("durata_tool_ms", 0.0)),
+        rendering_ms=float(metrics_dict.get("durata_rendering_ms", 0.0)),
         repeat_index=repeat_index,
         quality_failures=list(quality.failures),
     )
@@ -861,7 +861,7 @@ def _should_skip_variant(
     *,
     total_memory_bytes: int,
 ) -> str | None:
-    """Motivazione di skip per guardia memoria, oppure None se eseguibile."""
+    """Skip reason from the memory guard, or None if runnable."""
     variant = resolve_model_variant(alias)
     memory_gib = total_memory_bytes / GIBIBYTE if total_memory_bytes > 0 else 0.0
     if not variant.fits_memory(total_memory_bytes):
@@ -883,15 +883,15 @@ def _machine_info(base_url: str, label: str) -> dict[str, Any]:
         "ollama_version": _ollama_version(base_url),
         "memory_bytes": memory_bytes,
         "memory_gib": round(memory_bytes / GIBIBYTE, 2) if memory_bytes else 0.0,
-        "thermal_state": int(leggi_stato_termico()),
-        "temp_celsius": leggi_temperatura_cpu_celsius(),
+        "thermal_state": int(read_thermal_state()),
+        "temp_celsius": read_cpu_temperature_celsius(),
         "on_battery": power.on_battery,
         "low_power_mode": power.low_power_mode,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
 
 
-def _stampa_progresso(result: BenchmarkCaseResult) -> None:
+def _print_progress(result: BenchmarkCaseResult) -> None:
     verdict = "OK " if result.quality_pass else "KO "
     failures = f" [{'; '.join(result.quality_failures)}]" if result.quality_failures else ""
     print(
@@ -919,30 +919,30 @@ def run_suite(
     label: str = "",
 ) -> BenchmarkSuiteReport:
     """
-    Esegue la matrice controllata e restituisce un report serializzabile.
+    Run the controlled matrix and return a serializable report.
 
     Args:
-        aliases: Sottoinsieme fast/default/quality.
-        contexts: Override opzionali di num_ctx; vuoto usa il budget della route.
-        cases: Casi funzionali da misurare.
-        modes: Percorsi di misura.
-        base_url: Endpoint Ollama.
-        cooldown_seconds: Pausa tra misure per ridurre carry-over termico.
-        think: CoT nativo per il percorso raw.
-        repeat: Ripetizioni warm per (alias, caso, modalità).
-        cold: Aggiunge una misura cold prima delle ripetizioni warm.
-        raw_options: Opzioni Ollama extra per il percorso raw.
-        label: Etichetta libera per il registro iterazioni.
+        aliases: Subset of fast/default/quality.
+        contexts: Optional num_ctx overrides; empty uses the route budget.
+        cases: Functional cases to measure.
+        modes: Measurement paths.
+        base_url: Ollama endpoint.
+        cooldown_seconds: Pause between measurements to reduce thermal carry-over.
+        think: Native CoT for the raw path.
+        repeat: Warm repetitions per (alias, case, mode).
+        cold: Add a cold measurement before the warm repetitions.
+        raw_options: Extra Ollama options for the raw path.
+        label: Free-form label for the iteration log.
 
     Returns:
-        Report con metadati macchina, risultati e skip motivati.
+        Report with machine metadata, results and justified skips.
     """
     machine = _machine_info(base_url, label)
     memory_bytes = int(machine["memory_bytes"])
     results: list[BenchmarkCaseResult] = []
     skipped: list[dict[str, str]] = []
 
-    def pausa() -> None:
+    def pause() -> None:
         if cooldown_seconds > 0:
             time.sleep(cooldown_seconds)
 
@@ -954,7 +954,7 @@ def run_suite(
                 {"alias": alias, "quantization": variant.quantization, "reason": skip_reason}
             )
             continue
-        sessions: dict[ModeName, SessioneBenchmark] = {}
+        sessions: dict[ModeName, BenchmarkSession] = {}
         warm_profile = profile_for_route(alias, "react")
         load_ms = _warm_up(base_url, warm_profile.variant.tag, warm_profile.context_tokens)
         print(f"warm-up {alias} ({warm_profile.variant.tag}): load {load_ms:.0f} ms", flush=True)
@@ -990,7 +990,7 @@ def run_suite(
                             else:
                                 bench_session = sessions.get(mode)
                                 if bench_session is None:
-                                    bench_session = SessioneBenchmark(alias, mode)
+                                    bench_session = BenchmarkSession(alias, mode)
                                     sessions[mode] = bench_session
                                 result = measure_agent_case(
                                     case=case,
@@ -999,8 +999,8 @@ def run_suite(
                                     repeat_index=index,
                                 )
                             results.append(result)
-                            _stampa_progresso(result)
-                            pausa()
+                            _print_progress(result)
+                            pause()
         finally:
             for bench_session in sessions.values():
                 bench_session.close()
@@ -1008,7 +1008,7 @@ def run_suite(
 
 
 # ---------------------------------------------------------------------------
-# Aggregazione
+# Aggregation
 # ---------------------------------------------------------------------------
 
 
@@ -1016,15 +1016,15 @@ def _median(values: list[float]) -> float:
     return statistics.median(values) if values else 0.0
 
 
-def aggrega_gruppi(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def aggregate_groups(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
-    Aggrega le misure warm per (alias, caso, modalità) con mediane.
+    Aggregate the warm measurements per (alias, case, mode) with medians.
 
     Args:
-        results: Risultati serializzati (dict) di uno o più run.
+        results: Serialized results (dicts) from one or more runs.
 
     Returns:
-        Un dizionario per gruppo, ordinato per alias, modalità e caso.
+        One dictionary per group, sorted by alias, mode and case.
     """
     groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for item in results:
@@ -1062,8 +1062,8 @@ def aggrega_gruppi(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return aggregated
 
 
-def aggrega_per_alias(groups: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Riduce i gruppi a un profilo per alias (mediane delle mediane, somme e2e)."""
+def aggregate_by_alias(groups: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Reduce the groups to one profile per alias (medians of medians, e2e sums)."""
     per_alias: dict[str, dict[str, Any]] = {}
     for alias in sorted({g["alias"] for g in groups}):
         own = [g for g in groups if g["alias"] == alias]
@@ -1090,13 +1090,13 @@ def aggrega_per_alias(groups: list[dict[str, Any]]) -> dict[str, dict[str, Any]]
 
 
 def _summarize(results: list[BenchmarkCaseResult]) -> dict[str, Any]:
-    """Aggrega mediane globali, per gruppo e per alias."""
+    """Aggregate global, per-group and per-alias medians."""
     if not results:
         return {}
     serialized = [asdict(item) for item in results]
     totals = [item.total_ms for item in results if item.ok]
     decodes = [item.decode_tokens_per_s for item in results if item.decode_tokens_per_s]
-    groups = aggrega_gruppi(serialized)
+    groups = aggregate_groups(serialized)
     return {
         "measure_count": len(results),
         "ok_count": sum(1 for item in results if item.ok),
@@ -1105,7 +1105,7 @@ def _summarize(results: list[BenchmarkCaseResult]) -> dict[str, Any]:
         "median_decode_tokens_per_s": _median(decodes),
         "thermal_states": sorted({item.thermal_state for item in results}),
         "groups": groups,
-        "per_alias": aggrega_per_alias(groups),
+        "per_alias": aggregate_by_alias(groups),
     }
 
 
@@ -1115,7 +1115,7 @@ def _summarize(results: list[BenchmarkCaseResult]) -> dict[str, Any]:
 
 
 def _parse_option(raw: str) -> tuple[str, Any]:
-    """Converte `chiave=valore` in una coppia tipizzata (int, float, bool o str)."""
+    """Turn `key=value` into a typed pair (int, float, bool or str)."""
     if "=" not in raw:
         raise argparse.ArgumentTypeError(f"opzione non valida: {raw!r} (atteso chiave=valore)")
     key, value = raw.split("=", 1)
@@ -1207,10 +1207,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     """
-    Entry-point CLI del benchmark.
+    CLI entry point of the benchmark.
 
     Returns:
-        0 se il report è stato prodotto; 2 su errori di configurazione.
+        0 if the report was produced; 2 on configuration errors.
     """
     args = _parse_args(argv)
     if args.list_cases:

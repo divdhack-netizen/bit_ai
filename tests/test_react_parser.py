@@ -1,4 +1,4 @@
-"""Test unit: parser ReAct tollerante (Action + Final Answer miste)."""
+"""Unit tests: tolerant ReAct parser (mixed Action + Final Answer)."""
 
 from __future__ import annotations
 
@@ -6,19 +6,19 @@ import pytest
 from langchain_core.agents import AgentAction, AgentFinish
 from langchain_core.exceptions import OutputParserException
 
-from assistente.react_parser import AssistenteReActParser
+from assistant.react_parser import AssistantReActParser
 
 pytestmark = pytest.mark.unit
 
 
-def test_parser_preferisce_action_quando_c_e_anche_final_answer() -> None:
+def test_parser_prefers_action_when_final_answer_also_present() -> None:
     """
-    Gemma spesso emette scrivi_file e Final Answer nello stesso turno.
+    Gemma often emits scrivi_file and Final Answer in the same turn.
 
     Input: Thought + Action + Action Input + Final Answer.
-    Output: AgentAction (tool eseguito), non eccezione né solo Finish.
+    Output: AgentAction (tool executed), not an exception or just a Finish.
     """
-    testo = (
+    text = (
         "Thought: salvo la ricetta sul disco.\n"
         "Action: scrivi_file\n"
         "Action Input: tartufi_lotus.txt\n"
@@ -26,73 +26,73 @@ def test_parser_preferisce_action_quando_c_e_anche_final_answer() -> None:
         "Ingredienti:\n- Biscotti Lotus\n"
         "Final Answer: Ho creato il file tartufi_lotus.txt"
     )
-    esito = AssistenteReActParser().parse(testo)
-    assert isinstance(esito, AgentAction)
-    assert esito.tool == "scrivi_file"
-    assert "tartufi_lotus.txt" in str(esito.tool_input)
-    assert "Biscotti Lotus" in str(esito.tool_input)
-    assert "Final Answer" not in str(esito.tool_input)
+    outcome = AssistantReActParser().parse(text)
+    assert isinstance(outcome, AgentAction)
+    assert outcome.tool == "scrivi_file"
+    assert "tartufi_lotus.txt" in str(outcome.tool_input)
+    assert "Biscotti Lotus" in str(outcome.tool_input)
+    assert "Final Answer" not in str(outcome.tool_input)
 
 
-def test_parser_final_answer_semplice() -> None:
-    """Solo Final Answer → AgentFinish senza tool."""
-    testo = "Thought: ho la risposta.\nFinal Answer: ciao"
-    esito = AssistenteReActParser().parse(testo)
-    assert isinstance(esito, AgentFinish)
-    assert esito.return_values["output"] == "ciao"
+def test_parser_simple_final_answer() -> None:
+    """Final Answer only → AgentFinish with no tool."""
+    text = "Thought: ho la risposta.\nFinal Answer: ciao"
+    outcome = AssistantReActParser().parse(text)
+    assert isinstance(outcome, AgentFinish)
+    assert outcome.return_values["output"] == "ciao"
 
 
-def test_parser_action_nessuna_diventa_final_answer() -> None:
-    """Action: Nessuna chiude il turno col Thought, senza retry sul LLM."""
-    testo = (
+def test_parser_action_none_becomes_final_answer() -> None:
+    """Action: Nessuna closes the turn with the Thought, without retrying the LLM."""
+    text = (
         "Thought: non serve alcun tool, la risposta è 42.\n"
         "Action: Nessuna\n"
         "Action Input: risposta concettuale"
     )
-    esito = AssistenteReActParser().parse(testo)
-    assert isinstance(esito, AgentFinish)
-    assert "42" in esito.return_values["output"]
+    outcome = AssistantReActParser().parse(text)
+    assert isinstance(outcome, AgentFinish)
+    assert "42" in outcome.return_values["output"]
 
 
-def test_parser_action_senza_etichetta_input() -> None:
-    """Un path sotto Action senza «Action Input:» resta un tool valido."""
-    testo = "Thought: elenco la cartella.\nAction: elenca_cartella\nassistente"
-    esito = AssistenteReActParser().parse(testo)
-    assert isinstance(esito, AgentAction)
-    assert esito.tool == "elenca_cartella"
-    assert "assistente" in str(esito.tool_input)
+def test_parser_action_without_input_label() -> None:
+    """A path under Action without «Action Input:» stays a valid tool."""
+    text = "Thought: elenco la cartella.\nAction: elenca_cartella\nassistente"
+    outcome = AssistantReActParser().parse(text)
+    assert isinstance(outcome, AgentAction)
+    assert outcome.tool == "elenca_cartella"
+    assert "assistente" in str(outcome.tool_input)
 
 
-def test_parser_nome_tool_con_backtick() -> None:
-    """Il CoT Qwen spesso wrappa Action: `scrivi_file`."""
-    testo = (
+def test_parser_tool_name_with_backtick() -> None:
+    """Qwen's CoT often wraps Action: `scrivi_file`."""
+    text = (
         "Thought: salvo.\n"
         "Action: `scrivi_file`.\n"
         "Action Input: tmp/a.js\n---\nconsole.log(1)\n"
     )
-    esito = AssistenteReActParser().parse(testo)
-    assert isinstance(esito, AgentAction)
-    assert esito.tool == "scrivi_file"
+    outcome = AssistantReActParser().parse(text)
+    assert isinstance(outcome, AgentAction)
+    assert outcome.tool == "scrivi_file"
 
 
-def test_parser_ignora_piano_cot_senza_action_eseguibile() -> None:
-    """Un outline «Observation: Result» non deve diventare scrivi_file."""
-    testo = (
+def test_parser_ignores_cot_plan_without_executable_action() -> None:
+    """An «Observation: Result» outline must not become scrivi_file."""
+    text = (
         "Thinking Process:\n"
         "1. Action: scrivi_file\n"
         "3.  Observation: Result.\n"
         "        4.  Thought: Verify.\n"
         "        5.  Final Answer.\n"
     )
-    esito = AssistenteReActParser().parse(testo)
-    assert isinstance(esito, AgentFinish)
-    output = str(esito.return_values.get("output", ""))
+    outcome = AssistantReActParser().parse(text)
+    assert isinstance(outcome, AgentFinish)
+    output = str(outcome.return_values.get("output", ""))
     assert "Observation: Result" not in output
 
 
-def test_parser_modifica_file_con_final_answer_mista() -> None:
-    """Action modifica_file multilineare vince su Final Answer nello stesso turno."""
-    testo = (
+def test_parser_edit_file_with_mixed_final_answer() -> None:
+    """A multiline modifica_file Action beats Final Answer in the same turn."""
+    text = (
         "Thought: aggiorno la funzione.\n"
         "Action: modifica_file\n"
         "Action Input: src/app.py\n"
@@ -102,10 +102,10 @@ def test_parser_modifica_file_con_final_answer_mista() -> None:
         "    return 2\n"
         "Final Answer: Ho aggiornato src/app.py"
     )
-    esito = AssistenteReActParser().parse(testo)
-    assert isinstance(esito, AgentAction)
-    assert esito.tool == "modifica_file"
-    tool_input = str(esito.tool_input)
+    outcome = AssistantReActParser().parse(text)
+    assert isinstance(outcome, AgentAction)
+    assert outcome.tool == "modifica_file"
+    tool_input = str(outcome.tool_input)
     assert "src/app.py" in tool_input
     assert "<<<OLD" in tool_input
     assert "    return 1" in tool_input
@@ -113,24 +113,24 @@ def test_parser_modifica_file_con_final_answer_mista() -> None:
     assert "Final Answer" not in tool_input
 
 
-def test_parser_thought_policy_lungo_non_diventa_risposta() -> None:
-    """Un Thought che litiga col gate scrittura non deve finire come Final Answer."""
+def test_parser_long_policy_thought_does_not_become_answer() -> None:
+    """A Thought that argues with the write gate must not end up as Final Answer."""
     from langchain_core.exceptions import OutputParserException
 
-    testo = (
+    text = (
         "Thought: L'utente richiede di abbellire la navbar. "
         "Scrittura consentita: no. Non posso usare scrivi_file o modifica_file. "
         + ("Non posso completare la richiesta. " * 20)
     )
     with pytest.raises(OutputParserException):
-        AssistenteReActParser().parse(testo)
+        AssistantReActParser().parse(text)
 
 
-def test_parser_modifica_file_troncato_chiede_retry() -> None:
-    """Un modifica_file senza <<<NEW non deve chiudere il turno con output vuoto."""
+def test_parser_truncated_edit_file_asks_retry() -> None:
+    """A modifica_file without <<<NEW must not close the turn with empty output."""
     from langchain_core.exceptions import OutputParserException
 
-    testo = (
+    text = (
         "Thought: Il file sito/index.html è stato letto. "
         "Per rendere i link più grandi aumento font-size e padding.\n"
         "Action: modifica_file\n"
@@ -144,35 +144,35 @@ def test_parser_modifica_file_troncato_chiede_retry() -> None:
         "            pa"
     )
     with pytest.raises(OutputParserException, match="incompleta"):
-        AssistenteReActParser().parse(testo)
+        AssistantReActParser().parse(text)
 
 
-def test_parser_crea_cartella_con_backtick() -> None:
-    """Qwen wrappa spesso il nome tool; crea_cartella resta un Action."""
-    testo = "Thought: creo notes.\nAction: `crea_cartella`\nAction Input: notes"
-    esito = AssistenteReActParser().parse(testo)
-    assert isinstance(esito, AgentAction)
-    assert esito.tool == "crea_cartella"
-    assert "notes" in str(esito.tool_input)
+def test_parser_create_folder_with_backtick() -> None:
+    """Qwen often wraps the tool name; crea_cartella stays an Action."""
+    text = "Thought: creo notes.\nAction: `crea_cartella`\nAction Input: notes"
+    outcome = AssistantReActParser().parse(text)
+    assert isinstance(outcome, AgentAction)
+    assert outcome.tool == "crea_cartella"
+    assert "notes" in str(outcome.tool_input)
 
 
-def test_tool_sconosciuto_non_chiude_il_turno() -> None:
-    """Un tool inesistente torna al modello come errore di parse, non come risposta vuota."""
-    testo = "Thought: provo.\nAction: cancella_tutto\nAction Input: /"
+def test_unknown_tool_does_not_close_turn() -> None:
+    """A non-existent tool goes back to the model as a parse error, not an empty answer."""
+    text = "Thought: provo.\nAction: cancella_tutto\nAction Input: /"
     with pytest.raises(OutputParserException):
-        AssistenteReActParser().parse(testo)
+        AssistantReActParser().parse(text)
 
 
 @pytest.mark.parametrize(
-    ("testo", "atteso"),
+    ("text", "expected"),
     [
         ("Action: elenca_cartella\nAction Input: attualeFinal Answer: I file sono: [...]", "attuale"),
         ("Action: leggi_documento\nAction Input: a.pages Observation: testo", "a.pages"),
         ("Action: elenca_cartella\nAction Input: .Action: elenca_cartella", "."),
     ],
 )
-def test_parser_taglia_final_answer_incollata_all_input(testo: str, atteso: str) -> None:
-    """Gemma incolla la conclusione sulla riga dell'input: il tool riceve solo il path."""
-    esito = AssistenteReActParser().parse(testo)
-    assert isinstance(esito, AgentAction)
-    assert esito.tool_input == atteso
+def test_parser_cuts_final_answer_pasted_into_input(text: str, expected: str) -> None:
+    """Gemma pastes the conclusion on the input line: the tool receives only the path."""
+    outcome = AssistantReActParser().parse(text)
+    assert isinstance(outcome, AgentAction)
+    assert outcome.tool_input == expected

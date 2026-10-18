@@ -1,6 +1,6 @@
-"""Compatibilità: reindirizza a main.py (entry point attuale)."""
+"""Compatibility shim: forwards to main.py (the current entry point)."""
 
-from assistente.cli import main
+from assistant.cli import main
 
 if __name__ == "__main__":
     main()

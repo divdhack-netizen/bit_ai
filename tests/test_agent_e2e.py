@@ -1,4 +1,4 @@
-"""Test e2e con Ollama (modello default): riassunto, scrivi_file e risposte dai documenti."""
+"""E2E tests with Ollama (default model): summary, scrivi_file and answers from the documents."""
 
 from __future__ import annotations
 
@@ -6,15 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from assistente.config import SEPARATORE_FILE, WORKSPACE, ConfigRuntime, FileConfig
-from assistente.console import ConsoleUI
-from assistente.file_service import WorkspaceFileService
-from assistente.session import SessioneAgente
+from assistant.config import FILE_SEPARATOR, WORKSPACE, ConfigRuntime, FileConfig
+from assistant.console import ConsoleUI
+from assistant.file_service import WorkspaceFileService
+from assistant.session import AgentSession
 from tests.conftest import DIR_E2E_REL
 
 pytestmark = [pytest.mark.e2e, pytest.mark.timeout(300)]
 
-_TESTO_SORGENTE = """
+_SOURCE_TEXT = """
 Il linguaggio Python è ampiamente usato per automazione, data science e backend web.
 È interpretato, tipizzato dinamicamente e dispone di una vasta libreria standard.
 Il progetto coding_gemma4 implementa un assistente di programmazione locale basato su
@@ -30,12 +30,12 @@ Le iterazioni ReAct sono limitate: l'agente deve scegliere Action e Action Input
 senza ripetere inutilmente la stessa scrittura file.
 """.strip()
 
-_MIN_CARATTERI_RIASSUNTO = 40
-# Marker fisso per assert exact sul body .txt dopo sanitizzazione (newline finale).
+_MIN_SUMMARY_CHARS = 40
+# Fixed marker for an exact assert on the .txt body after sanitization (trailing newline).
 _PROBE_TXT_BODY = "probe-ok-2026"
 _PROBE_TXT_ON_DISK = f"{_PROBE_TXT_BODY}\n"
-# Fatto inventato: il modello può conoscerlo solo leggendo il documento.
-_FATTO_CORPUS = (
+# Invented fact: the model can only know it by reading the document.
+_CORPUS_FACT = (
     "Nel registro dell'osservatorio, la balena chiamata Zeroglut ha percorso "
     "4.217 chilometri durante la migrazione del 2025.\n"
 )
@@ -43,59 +43,59 @@ _FATTO_CORPUS = (
 
 def _workspace_text(path_rel: str) -> str | None:
     """
-    Legge UTF-8 da WORKSPACE/path_rel, oppure None se il file manca.
+    Read UTF-8 from WORKSPACE/path_rel, or None if the file is missing.
 
     Args:
-        path_rel: Path relativo al workspace.
+        path_rel: Path relative to the workspace.
 
     Returns:
-        Contenuto del file oppure None.
+        The file content, or None.
     """
-    destinazione = WORKSPACE / path_rel
-    # Evita FileNotFoundError nei messaggi di assert contestuali.
-    if not destinazione.is_file():
+    destination = WORKSPACE / path_rel
+    # Avoid FileNotFoundError in the contextual assert messages.
+    if not destination.is_file():
         return None
-    return destinazione.read_text(encoding="utf-8")
+    return destination.read_text(encoding="utf-8")
 
 
 def _raise_with_context(
-    errore: BaseException,
+    error: BaseException,
     *,
-    risposta: str,
-    path_scritti: list[str],
+    answer: str,
+    written_paths: list[str],
     path_rel: str,
 ) -> None:
     """
-    Rilancia AssertionError arricchita con risposta, path_scritti e contenuto disco.
+    Re-raise an AssertionError enriched with the answer, written_paths and disk content.
 
     Args:
-        errore: Eccezione originale (AssertionError o SyntaxError).
-        risposta: Final Answer dell'agente.
-        path_scritti: Path materializzati restituiti da esegui_richiesta.
-        path_rel: Path relativo sotto esame.
+        error: Original exception (AssertionError or SyntaxError).
+        answer: The agent's Final Answer.
+        written_paths: Materialized paths returned by run_request.
+        path_rel: Relative path under test.
     """
-    contenuto = _workspace_text(path_rel)
+    content = _workspace_text(path_rel)
     raise AssertionError(
-        f"{errore}; risposta={risposta!r} path_scritti={path_scritti!r} "
-        f"contenuto={contenuto!r}"
-    ) from errore
+        f"{error}; risposta={answer!r} path_scritti={written_paths!r} "
+        f"contenuto={content!r}"
+    ) from error
 
 
-def _prompt_scrivi_file(path_rel: str, body: str) -> str:
+def _write_file_prompt(path_rel: str, body: str) -> str:
     """
-    Costruisce un prompt ReAct vincolato al contratto path / --- / body.
+    Build a ReAct prompt bound to the path / --- / body contract.
 
     Args:
-        path_rel: Destinazione relativa nel workspace.
-        body: Contenuto esatto da scrivere (senza fence markdown).
+        path_rel: Relative destination in the workspace.
+        body: Exact content to write (no markdown fence).
 
     Returns:
-        Prompt utente per esegui_richiesta.
+        User prompt for run_request.
     """
     return (
         f"Crea il file {path_rel}. "
         "Usa una sola volta scrivi_file con Action Input a tre righe: "
-        f"path, poi '{SEPARATORE_FILE}', poi solo questo body esatto:\n"
+        f"path, poi '{FILE_SEPARATOR}', poi solo questo body esatto:\n"
         f"{body}\n"
         "Niente markdown, niente testo extra nel body."
     )
@@ -103,154 +103,154 @@ def _prompt_scrivi_file(path_rel: str, body: str) -> str:
 
 def _assert_workspace_text(path_rel: str, expected: str) -> None:
     """
-    Verifica che path_rel esista con contenuto esatto (inclusa newline finale).
+    Check that path_rel exists with the exact content (trailing newline included).
 
     Args:
-        path_rel: Path relativo atteso su disco.
-        expected: Byte-stringa UTF-8 attesa dopo sanitizzazione tool.
+        path_rel: Relative path expected on disk.
+        expected: Expected UTF-8 string after tool sanitization.
     """
-    destinazione = WORKSPACE / path_rel
-    assert destinazione.is_file(), f"File assente: {path_rel}"
-    assert destinazione.read_text(encoding="utf-8") == expected
+    destination = WORKSPACE / path_rel
+    assert destination.is_file(), f"File assente: {path_rel}"
+    assert destination.read_text(encoding="utf-8") == expected
 
 
-def _assert_riassunto_file(path_rel: str, sorgente: str | None = None) -> str:
+def _assert_summary_file(path_rel: str, source: str | None = None) -> str:
     """
-    Verifica che path_rel esista e contenga un riassunto non banale.
+    Check that path_rel exists and holds a non-trivial summary.
 
-    Output: contenuto strip del file.
+    Output: the stripped file content.
     """
-    destinazione = WORKSPACE / path_rel
-    assert destinazione.is_file(), f"File assente: {path_rel}"
-    contenuto = destinazione.read_text(encoding="utf-8").strip()
-    assert len(contenuto) >= _MIN_CARATTERI_RIASSUNTO, contenuto
-    if sorgente is not None:
-        assert contenuto != sorgente
-        assert len(contenuto) < len(sorgente)
-    return contenuto
+    destination = WORKSPACE / path_rel
+    assert destination.is_file(), f"File assente: {path_rel}"
+    content = destination.read_text(encoding="utf-8").strip()
+    assert len(content) >= _MIN_SUMMARY_CHARS, content
+    if source is not None:
+        assert content != source
+        assert len(content) < len(source)
+    return content
 
 
-def test_e2e_riassunto_file_su_txt(
+def test_e2e_file_summary_to_txt(
     workspace_test_dir: Path,
-    sessione_agente: SessioneAgente,
+    agent_session: AgentSession,
     config_e2e: ConfigRuntime,
-    richiede_ollama,
+    requires_ollama,
 ) -> None:
-    """Agente: riassumi_documento sorgente --- destinazione → file su disco."""
-    path_sorgente = f"{DIR_E2E_REL}/sorgente.txt"
-    path_riassunto = f"{DIR_E2E_REL}/riassunto.txt"
-    (WORKSPACE / path_sorgente).write_text(_TESTO_SORGENTE, encoding="utf-8")
+    """Agent: riassumi_documento source --- destination → file on disk."""
+    source_path = f"{DIR_E2E_REL}/sorgente.txt"
+    summary_path = f"{DIR_E2E_REL}/riassunto.txt"
+    (WORKSPACE / source_path).write_text(_SOURCE_TEXT, encoding="utf-8")
 
     prompt = (
         f"Usa una sola volta riassumi_documento con Action Input a tre righe: "
-        f"'{path_sorgente}', poi '---', poi '{path_riassunto}'. "
+        f"'{source_path}', poi '---', poi '{summary_path}'. "
         "Non usare scrivi_file."
     )
-    risposta, path_scritti = sessione_agente.esegui_richiesta(prompt, config_e2e)
+    answer, written_paths = agent_session.run_request(prompt, config_e2e)
     try:
-        _assert_riassunto_file(path_riassunto, sorgente=_TESTO_SORGENTE)
-    except AssertionError as errore:
+        _assert_summary_file(summary_path, source=_SOURCE_TEXT)
+    except AssertionError as error:
         _raise_with_context(
-            errore,
-            risposta=risposta,
-            path_scritti=path_scritti,
-            path_rel=path_riassunto,
+            error,
+            answer=answer,
+            written_paths=written_paths,
+            path_rel=summary_path,
         )
 
 
-def test_e2e_scrivi_file_txt(
+def test_e2e_write_txt_file(
     workspace_test_dir: Path,
-    sessione_agente: SessioneAgente,
+    agent_session: AgentSession,
     config_e2e: ConfigRuntime,
-    richiede_ollama,
+    requires_ollama,
 ) -> None:
-    """Agente ReAct: scrivi_file crea un .txt con body esatto su disco."""
+    """ReAct agent: scrivi_file creates a .txt with the exact body on disk."""
     path_rel = f"{DIR_E2E_REL}/probe.txt"
-    risposta, path_scritti = sessione_agente.esegui_richiesta(
-        _prompt_scrivi_file(path_rel, _PROBE_TXT_BODY),
+    answer, written_paths = agent_session.run_request(
+        _write_file_prompt(path_rel, _PROBE_TXT_BODY),
         config_e2e,
     )
     try:
         _assert_workspace_text(path_rel, _PROBE_TXT_ON_DISK)
-        assert path_rel in path_scritti, path_scritti
-    except AssertionError as errore:
+        assert path_rel in written_paths, written_paths
+    except AssertionError as error:
         _raise_with_context(
-            errore,
-            risposta=risposta,
-            path_scritti=path_scritti,
+            error,
+            answer=answer,
+            written_paths=written_paths,
             path_rel=path_rel,
         )
 
 
-def test_e2e_crea_cartella_e_diario_txt(
+def test_e2e_create_folder_and_journal_txt(
     workspace_test_dir: Path,
-    sessione_agente: SessioneAgente,
+    agent_session: AgentSession,
     config_e2e: ConfigRuntime,
-    richiede_ollama,
+    requires_ollama,
 ) -> None:
-    """Agente: crea_cartella + scrivi_file su un diario di testo."""
-    cartella = f"{DIR_E2E_REL}/e2e_notes"
-    path_rel = f"{cartella}/diario.txt"
+    """Agent: crea_cartella + scrivi_file on a text journal."""
+    folder = f"{DIR_E2E_REL}/e2e_notes"
+    path_rel = f"{folder}/diario.txt"
     marker = "probe-diario-2026"
     prompt = (
-        f"Crea la cartella {cartella} e al suo interno il file {path_rel}. "
+        f"Crea la cartella {folder} e al suo interno il file {path_rel}. "
         "Usa una sola volta scrivi_file con Action Input a tre righe: "
-        f"path, poi '{SEPARATORE_FILE}', poi solo questo body esatto:\n"
+        f"path, poi '{FILE_SEPARATOR}', poi solo questo body esatto:\n"
         f"{marker}\n"
         "Niente markdown, niente testo extra nel body."
     )
-    risposta, path_scritti = sessione_agente.esegui_richiesta(prompt, config_e2e)
+    answer, written_paths = agent_session.run_request(prompt, config_e2e)
     try:
-        assert (WORKSPACE / cartella).is_dir()
+        assert (WORKSPACE / folder).is_dir()
         _assert_workspace_text(path_rel, f"{marker}\n")
-        assert path_rel in path_scritti or cartella in path_scritti, path_scritti
-    except AssertionError as errore:
+        assert path_rel in written_paths or folder in written_paths, written_paths
+    except AssertionError as error:
         _raise_with_context(
-            errore,
-            risposta=risposta,
-            path_scritti=path_scritti,
+            error,
+            answer=answer,
+            written_paths=written_paths,
             path_rel=path_rel,
         )
 
 
 @pytest.fixture
-def sessione_corpus(
+def corpus_session(
     workspace_test_dir: Path,
     config_e2e: ConfigRuntime,
-) -> tuple[SessioneAgente, Path]:
-    """Sessione confinata a una cartella con un solo documento noto."""
+) -> tuple[AgentSession, Path]:
+    """Session confined to a folder with a single known document."""
     corpus = workspace_test_dir / "e2e" / "balena"
     corpus.mkdir(parents=True)
-    (corpus / "registro.txt").write_text(_FATTO_CORPUS, encoding="utf-8")
+    (corpus / "registro.txt").write_text(_CORPUS_FACT, encoding="utf-8")
     ui = ConsoleUI()
-    ui.imposta_verbose(config_e2e.verbose)
+    ui.set_verbose(config_e2e.verbose)
     service = WorkspaceFileService(FileConfig(workspace=corpus))
-    return SessioneAgente(ui, file_service=service), corpus
+    return AgentSession(ui, file_service=service), corpus
 
 
-def test_e2e_risponde_dal_documento(
-    sessione_corpus: tuple[SessioneAgente, Path],
+def test_e2e_answers_from_document(
+    corpus_session: tuple[AgentSession, Path],
     config_e2e: ConfigRuntime,
-    richiede_ollama,
+    requires_ollama,
 ) -> None:
-    """Un fatto presente solo nel documento arriva nella risposta, con il file."""
-    sessione, _corpus = sessione_corpus
-    risposta, _scritti = sessione.esegui_richiesta(
+    """A fact present only in the document reaches the answer, with the file."""
+    session, _corpus = corpus_session
+    answer, _written = session.run_request(
         "Quanti chilometri ha percorso la balena Zeroglut?",
         config_e2e,
     )
-    assert "4.217" in risposta or "4217" in risposta, risposta
-    assert "registro" in risposta.casefold(), risposta
+    assert "4.217" in answer or "4217" in answer, answer
+    assert "registro" in answer.casefold(), answer
 
 
-def test_e2e_rifiuta_scrittura_non_txt(
-    sessione_corpus: tuple[SessioneAgente, Path],
+def test_e2e_rejects_non_txt_write(
+    corpus_session: tuple[AgentSession, Path],
     config_e2e: ConfigRuntime,
-    richiede_ollama,
+    requires_ollama,
 ) -> None:
-    """Una destinazione .md non viene mai creata: si scrive solo .txt."""
-    sessione, corpus = sessione_corpus
-    sessione.esegui_richiesta(
+    """A .md destination is never created: only .txt is written."""
+    session, corpus = corpus_session
+    session.run_request(
         "Scrivi il file note.md con il testo: prova.",
         config_e2e,
     )

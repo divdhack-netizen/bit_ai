@@ -1,4 +1,4 @@
-"""Confronta due report di benchmark_inference e produce un verdetto ACCETTA/RIFIUTA."""
+"""Compare two benchmark_inference reports and produce an ACCETTA/RIFIUTA verdict."""
 
 from __future__ import annotations
 
@@ -9,17 +9,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from benchmarks.benchmark_inference import aggrega_gruppi, aggrega_per_alias
+from benchmarks.benchmark_inference import aggregate_groups, aggregate_by_alias
 
 DEFAULT_TOLERANCE = 0.03
-# Il TTFT sotto il secondo è dominato dal rumore di scheduling: slack assoluto.
+# A sub-second TTFT is dominated by scheduling noise: absolute slack.
 TTFT_ABSOLUTE_SLACK_MS = 60.0
 _GROUP_KEY = ("alias", "case", "mode")
 
 
 @dataclass(frozen=True, slots=True)
-class Verdetto:
-    """Esito del confronto per alias, con i motivi del rifiuto."""
+class Verdict:
+    """Per-alias comparison outcome, with the rejection reasons."""
 
     alias: str
     accepted: bool
@@ -31,7 +31,7 @@ def _load(path: Path) -> dict[str, Any]:
 
 
 def _groups_by_key(payload: dict[str, Any]) -> dict[tuple[str, str, str], dict[str, Any]]:
-    groups = aggrega_gruppi(payload.get("results", []))
+    groups = aggregate_groups(payload.get("results", []))
     return {tuple(str(g[k]) for k in _GROUP_KEY): g for g in groups}  # type: ignore[misc]
 
 
@@ -45,80 +45,80 @@ def _fmt(value: float, unit: str = "") -> str:
     return f"{value:.1f}{unit}"
 
 
-def confronta(
+def compare(
     before: dict[str, Any],
     after: dict[str, Any],
     *,
     tolerance: float = DEFAULT_TOLERANCE,
     allow_more_tokens: bool = False,
-) -> tuple[list[dict[str, Any]], list[Verdetto]]:
+) -> tuple[list[dict[str, Any]], list[Verdict]]:
     """
-    Confronta i gruppi comuni e deriva il verdetto per alias.
+    Compare the common groups and derive the verdict per alias.
 
     Args:
-        before: Report JSON di riferimento.
-        after: Report JSON della modifica in valutazione.
-        tolerance: Rumore tollerato su decode tok/s ed e2e (frazione).
-        allow_more_tokens: Se True non rifiuta per prompt token o llm_calls in aumento.
+        before: Reference JSON report.
+        after: JSON report of the change under evaluation.
+        tolerance: Tolerated noise on decode tok/s and e2e (fraction).
+        allow_more_tokens: If True, do not reject for rising prompt tokens or llm_calls.
 
     Returns:
-        Righe di confronto per gruppo e verdetto per alias.
+        Comparison rows per group and the verdict per alias.
     """
     groups_before = _groups_by_key(before)
     groups_after = _groups_by_key(after)
     common = sorted(set(groups_before) & set(groups_after), key=lambda k: (k[0], k[2], k[1]))
     rows: list[dict[str, Any]] = []
     for key in common:
-        prima, dopo = groups_before[key], groups_after[key]
-        rows.append({"key": key, "before": prima, "after": dopo})
+        group_before_item, group_after_item = groups_before[key], groups_after[key]
+        rows.append({"key": key, "before": group_before_item, "after": group_after_item})
 
-    verdicts: list[Verdetto] = []
-    per_alias_before = aggrega_per_alias([groups_before[k] for k in common])
-    per_alias_after = aggrega_per_alias([groups_after[k] for k in common])
+    verdicts: list[Verdict] = []
+    per_alias_before = aggregate_by_alias([groups_before[k] for k in common])
+    per_alias_after = aggregate_by_alias([groups_after[k] for k in common])
     for alias in sorted(per_alias_before):
-        prima = per_alias_before[alias]
-        dopo = per_alias_after[alias]
+        group_before_item = per_alias_before[alias]
+        group_after_item = per_alias_after[alias]
         reasons: list[str] = []
-        if dopo["quality_pass_groups"] < prima["quality_pass_groups"]:
+        if group_after_item["quality_pass_groups"] < group_before_item["quality_pass_groups"]:
             reasons.append(
-                f"qualità: gruppi pass {prima['quality_pass_groups']} → {dopo['quality_pass_groups']}"
+                f"qualità: gruppi pass {group_before_item['quality_pass_groups']} → {group_after_item['quality_pass_groups']}"
             )
         for metric_key, label in (
             ("median_decode_tokens_per_s_raw", "decode raw"),
             ("median_decode_tokens_per_s_agent", "decode agente"),
         ):
-            if prima[metric_key] > 0 and dopo[metric_key] < prima[metric_key] * (1 - tolerance):
+            if group_before_item[metric_key] > 0 and group_after_item[metric_key] < group_before_item[metric_key] * (1 - tolerance):
                 reasons.append(
-                    f"{label}: {prima[metric_key]:.1f} → {dopo[metric_key]:.1f} tok/s"
+                    f"{label}: {group_before_item[metric_key]:.1f} → {group_after_item[metric_key]:.1f} tok/s"
                 )
-        if prima["sum_median_total_ms_agent"] > 0 and dopo["sum_median_total_ms_agent"] > prima[
+        if group_before_item["sum_median_total_ms_agent"] > 0 and group_after_item["sum_median_total_ms_agent"] > group_before_item[
             "sum_median_total_ms_agent"
         ] * (1 + tolerance):
             reasons.append(
                 "e2e agente: "
-                f"{prima['sum_median_total_ms_agent'] / 1000:.1f}s → "
-                f"{dopo['sum_median_total_ms_agent'] / 1000:.1f}s"
+                f"{group_before_item['sum_median_total_ms_agent'] / 1000:.1f}s → "
+                f"{group_after_item['sum_median_total_ms_agent'] / 1000:.1f}s"
             )
-        ttft_limit = prima["median_ttft_ms_agent"] * (1 + tolerance) + TTFT_ABSOLUTE_SLACK_MS
-        if prima["median_ttft_ms_agent"] > 0 and dopo["median_ttft_ms_agent"] > ttft_limit:
+        ttft_limit = group_before_item["median_ttft_ms_agent"] * (1 + tolerance) + TTFT_ABSOLUTE_SLACK_MS
+        if group_before_item["median_ttft_ms_agent"] > 0 and group_after_item["median_ttft_ms_agent"] > ttft_limit:
             reasons.append(
-                f"TTFT agente: {prima['median_ttft_ms_agent']:.0f} → "
-                f"{dopo['median_ttft_ms_agent']:.0f} ms"
+                f"TTFT agente: {group_before_item['median_ttft_ms_agent']:.0f} → "
+                f"{group_after_item['median_ttft_ms_agent']:.0f} ms"
             )
         if not allow_more_tokens:
-            if dopo["sum_median_prompt_tokens_agent"] > prima["sum_median_prompt_tokens_agent"] + 1:
+            if group_after_item["sum_median_prompt_tokens_agent"] > group_before_item["sum_median_prompt_tokens_agent"] + 1:
                 reasons.append(
                     "prompt token agente: "
-                    f"{prima['sum_median_prompt_tokens_agent']:.0f} → "
-                    f"{dopo['sum_median_prompt_tokens_agent']:.0f}"
+                    f"{group_before_item['sum_median_prompt_tokens_agent']:.0f} → "
+                    f"{group_after_item['sum_median_prompt_tokens_agent']:.0f}"
                 )
-            if dopo["sum_median_llm_calls_agent"] > prima["sum_median_llm_calls_agent"] + 0.51:
+            if group_after_item["sum_median_llm_calls_agent"] > group_before_item["sum_median_llm_calls_agent"] + 0.51:
                 reasons.append(
                     "llm_calls agente: "
-                    f"{prima['sum_median_llm_calls_agent']:.1f} → "
-                    f"{dopo['sum_median_llm_calls_agent']:.1f}"
+                    f"{group_before_item['sum_median_llm_calls_agent']:.1f} → "
+                    f"{group_after_item['sum_median_llm_calls_agent']:.1f}"
                 )
-        verdicts.append(Verdetto(alias, not reasons, tuple(reasons)))
+        verdicts.append(Verdict(alias, not reasons, tuple(reasons)))
     return rows, verdicts
 
 
@@ -165,7 +165,7 @@ def _render_table(rows: list[dict[str, Any]], *, markdown: bool) -> str:
     return "\n".join(lines)
 
 
-def _render_verdicts(verdicts: list[Verdetto], *, markdown: bool) -> str:
+def _render_verdicts(verdicts: list[Verdict], *, markdown: bool) -> str:
     lines: list[str] = []
     for verdict in verdicts:
         status = "ACCETTA" if verdict.accepted else "RIFIUTA"
@@ -188,13 +188,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     """
-    Entry-point CLI.
+    CLI entry point.
 
     Returns:
-        0 se tutti gli alias sono accettati, 1 altrimenti, 2 senza gruppi comuni.
+        0 if every alias is accepted, 1 otherwise, 2 with no common groups.
     """
     args = _parse_args(argv)
-    rows, verdicts = confronta(
+    rows, verdicts = compare(
         _load(args.before),
         _load(args.after),
         tolerance=args.tolerance,

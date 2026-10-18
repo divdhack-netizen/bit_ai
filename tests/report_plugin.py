@@ -1,4 +1,4 @@
-"""Plugin pytest: scrive output/report_test.md a fine sessione."""
+"""Pytest plugin: writes output/report_test.md at the end of the session."""
 
 from __future__ import annotations
 
@@ -9,24 +9,24 @@ from typing import TypedDict
 
 _REPORT_PATH = Path(__file__).resolve().parent.parent / "output" / "report_test.md"
 
-# Capability principali (ordine tabella); altri test finiscono in "altro (...)".
+# Main capabilities (table order); other tests fall into "altro (...)".
 _CAPABILITY_PER_TEST = {
-    "test_scrivi_file_roundtrip": "scrittura file",
-    "test_leggi_documento_contenuto": "lettura file",
-    "test_elenca_cartella_contiene_file": "elenco cartella",
-    "test_path_vietati_restituiscono_errore": "sandbox path",
-    "test_riassumi_documento_path_valido": "riassumi_documento (unit)",
-    "test_cerca_testo_trova_riga_e_pagina": "ricerca nel contenuto",
-    "test_docx_estratto_con_standard_library": "lettura docx",
-    "test_pdf_testo_per_pagina": "lettura pdf",
-    "test_immagine_passa_dalla_vision": "lettura immagini",
-    "test_e2e_riassunto_file_su_txt": "riassunto file → txt",
-    "test_e2e_scrivi_file_txt": "scrittura file e2e txt",
-    "test_e2e_risponde_dal_documento": "risposta dal documento",
-    "test_e2e_rifiuta_scrittura_non_txt": "scrittura solo .txt",
+    "test_write_file_roundtrip": "scrittura file",
+    "test_read_document_content": "lettura file",
+    "test_list_folder_contains_file": "elenco cartella",
+    "test_forbidden_paths_return_error": "sandbox path",
+    "test_summarize_document_valid_path": "riassumi_documento (unit)",
+    "test_search_text_finds_line_and_page": "ricerca nel contenuto",
+    "test_docx_extracted_with_standard_library": "lettura docx",
+    "test_pdf_text_per_page": "lettura pdf",
+    "test_image_goes_through_vision": "lettura immagini",
+    "test_e2e_file_summary_to_txt": "riassunto file → txt",
+    "test_e2e_write_txt_file": "scrittura file e2e txt",
+    "test_e2e_answers_from_document": "risposta dal documento",
+    "test_e2e_rejects_non_txt_write": "scrittura solo .txt",
 }
 
-_NOTE_AMBIENTALI = (
+_ENVIRONMENT_NOTES = (
     "- E2E richiedono Ollama locale; alias `default` con tag `gemma4:12b` "
     "(fallback `gemma4` per E4B se il tag esplicito manca; `:latest` è normalizzato).",
     "- Path tool confinati alla cartella documenti (sandbox: niente `..` / assoluti).",
@@ -34,30 +34,30 @@ _NOTE_AMBIENTALI = (
 )
 
 
-class _Esito(TypedDict):
+class _Outcome(TypedDict):
     nodeid: str
-    nome: str
+    name: str
     outcome: str
     when: str
     duration: float
     longrepr: str
 
 
-_ESITI: list[_Esito] = []
+_OUTCOMES: list[_Outcome] = []
 
 
 def pytest_sessionstart(session) -> None:
-    """Azzera buffer esiti all'avvio sessione."""
-    _ESITI.clear()
+    """Reset the outcome buffer at session start."""
+    _OUTCOMES.clear()
 
 
 def pytest_runtest_logreport(report) -> None:
-    """Accumula esiti call e setup non-pass (skip/fail pre-call)."""
+    """Collect call outcomes and non-passing setups (skip/fail before the call)."""
     if report.when == "teardown":
         return
     if report.when == "setup" and report.outcome == "passed":
         return
-    _ESITI.append(
+    _OUTCOMES.append(
         {
             "nodeid": report.nodeid,
             "nome": report.nodeid.rsplit("::", 1)[-1],
@@ -69,44 +69,44 @@ def pytest_runtest_logreport(report) -> None:
     )
 
 
-def _scegli_esito(esiti: list[_Esito]) -> _Esito:
-    """Preferisce la fase call se presente."""
-    for esito in esiti:
-        if esito["when"] == "call":
-            return esito
-    return esiti[-1]
+def _choose_outcome(outcomes: list[_Outcome]) -> _Outcome:
+    """Prefer the call phase when present."""
+    for outcome in outcomes:
+        if outcome["when"] == "call":
+            return outcome
+    return outcomes[-1]
 
 
-def _nota(esito: _Esito) -> str:
-    """Nota breve Markdown-safe per la tabella capability."""
-    if esito["outcome"] == "passed":
+def _note(outcome: _Outcome) -> str:
+    """Short Markdown-safe note for the capability table."""
+    if outcome["outcome"] == "passed":
         return "ok"
-    raw = (esito.get("longrepr") or esito["outcome"]).replace("|", "/")
+    raw = (outcome.get("longrepr") or outcome["outcome"]).replace("|", "/")
     return raw[:120]
 
 
-def _nome_base_test(nome: str) -> str:
-    """Rimuove il suffisso pytest ``[param]`` per matchare `_CAPABILITY_PER_TEST`."""
-    return nome.partition("[")[0]
+def _test_base_name(name: str) -> str:
+    """Strip the pytest ``[param]`` suffix to match `_CAPABILITY_PER_TEST`."""
+    return name.partition("[")[0]
 
 
 def pytest_sessionfinish(session, exitstatus) -> None:
-    """Scrive output/report_test.md aggregato per capability."""
+    """Write output/report_test.md aggregated by capability."""
     _REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    per_cap: dict[str, list[_Esito]] = defaultdict(list)
-    for esito in _ESITI:
-        chiave = _nome_base_test(esito["nome"])
-        capability = _CAPABILITY_PER_TEST.get(chiave, f"altro ({esito['nome']})")
-        per_cap[capability].append(esito)
+    per_cap: dict[str, list[_Outcome]] = defaultdict(list)
+    for outcome in _OUTCOMES:
+        key = _test_base_name(outcome["nome"])
+        capability = _CAPABILITY_PER_TEST.get(key, f"altro ({outcome['nome']})")
+        per_cap[capability].append(outcome)
 
-    ordine = list(dict.fromkeys(_CAPABILITY_PER_TEST.values()))
-    capacita = ordine + [c for c in per_cap if c not in ordine]
-    ora = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    order = list(dict.fromkeys(_CAPABILITY_PER_TEST.values()))
+    capacity = order + [c for c in per_cap if c not in order]
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-    linee = [
+    lines = [
         "# Report test agente",
         "",
-        f"Generato: {ora}",
+        f"Generato: {now}",
         f"Exit status pytest: `{exitstatus}`",
         "",
         "## Esito per capability",
@@ -114,25 +114,25 @@ def pytest_sessionfinish(session, exitstatus) -> None:
         "| Capability | Esito | Test | Durata (s) | Note |",
         "|---|---|---|---|---|",
     ]
-    for capability in capacita:
-        esiti = per_cap.get(capability)
-        if not esiti:
-            linee.append(f"| {capability} | non eseguito | — | — | nessun test raccolto |")
+    for capability in capacity:
+        outcomes = per_cap.get(capability)
+        if not outcomes:
+            lines.append(f"| {capability} | non eseguito | — | — | nessun test raccolto |")
             continue
-        scelto = _scegli_esito(esiti)
-        linee.append(
-            f"| {capability} | **{scelto['outcome']}** | `{scelto['nome']}` | "
-            f"{scelto['duration']:.1f} | {_nota(scelto)} |"
+        chosen = _choose_outcome(outcomes)
+        lines.append(
+            f"| {capability} | **{chosen['outcome']}** | `{chosen['nome']}` | "
+            f"{chosen['duration']:.1f} | {_note(chosen)} |"
         )
 
-    linee.extend(["", "## Dettaglio test", ""])
-    for esito in _ESITI:
-        linee.append(
-            f"- `{esito['nodeid']}` — {esito['when']}/{esito['outcome']} "
-            f"({esito['duration']:.1f}s)"
+    lines.extend(["", "## Dettaglio test", ""])
+    for outcome in _OUTCOMES:
+        lines.append(
+            f"- `{outcome['nodeid']}` — {outcome['when']}/{outcome['outcome']} "
+            f"({outcome['duration']:.1f}s)"
         )
-        if esito["outcome"] == "failed" and esito["longrepr"]:
-            linee.append(f"  - errore: {esito['longrepr'].replace(chr(10), ' ')[:400]}")
+        if outcome["outcome"] == "failed" and outcome["longrepr"]:
+            lines.append(f"  - errore: {outcome['longrepr'].replace(chr(10), ' ')[:400]}")
 
-    linee.extend(["", "## Note ambientali / vincoli", "", *_NOTE_AMBIENTALI, ""])
-    _REPORT_PATH.write_text("\n".join(linee), encoding="utf-8")
+    lines.extend(["", "## Note ambientali / vincoli", "", *_ENVIRONMENT_NOTES, ""])
+    _REPORT_PATH.write_text("\n".join(lines), encoding="utf-8")

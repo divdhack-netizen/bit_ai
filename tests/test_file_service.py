@@ -1,4 +1,4 @@
-"""Test unitari del servizio file atomico, sandboxed e isolato per sessione."""
+"""Unit tests for the atomic, sandboxed, per-session file service."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
-from assistente.config import FileConfig
-from assistente.file_service import WorkspaceFileService
+from assistant.config import FileConfig
+from assistant.file_service import WorkspaceFileService
 
 pytestmark = pytest.mark.unit
 
@@ -18,10 +18,10 @@ _UPDATED_CONTENT = "contenuto aggiornato\n"
 
 def _service(workspace: Path, *, max_read_characters: int = 12_000) -> WorkspaceFileService:
     """
-    Costruisce un servizio confinato nella directory temporanea del test.
+    Build a service confined to the test's temporary directory.
 
     Returns:
-        Servizio deny-by-default con configurazione indipendente dal repository.
+        Deny-by-default service with configuration independent of the repository.
     """
     return WorkspaceFileService(
         FileConfig(
@@ -31,8 +31,8 @@ def _service(workspace: Path, *, max_read_characters: int = 12_000) -> Workspace
     )
 
 
-def test_servizio_blocca_scrittura_senza_intent(tmp_path: Path) -> None:
-    """Lo stato iniziale deny-by-default impedisce persistenza accidentale."""
+def test_service_blocks_write_without_intent(tmp_path: Path) -> None:
+    """The deny-by-default initial state prevents accidental persistence."""
     service = _service(tmp_path)
 
     result = service.write_text("blocked.txt", "non scrivere")
@@ -42,10 +42,10 @@ def test_servizio_blocca_scrittura_senza_intent(tmp_path: Path) -> None:
     assert not (tmp_path / "blocked.txt").exists()
 
 
-def test_scrittura_atomica_supporta_spazi_e_unicode(
+def test_atomic_write_supports_spaces_and_unicode(
     tmp_path: Path,
 ) -> None:
-    """Spazi e caratteri non ASCII sono validi nei path .txt."""
+    """Spaces and non-ASCII characters are valid in .txt paths."""
     service = _service(tmp_path)
     service.begin_turn(write_allowed=True)
     relative_path = "documenti utili/ricetta_è_finale.txt"
@@ -58,15 +58,15 @@ def test_scrittura_atomica_supporta_spazi_e_unicode(
     assert service.written_paths == [relative_path]
 
 
-def test_errore_replace_lascia_intatto_il_file_precedente(tmp_path: Path) -> None:
-    """Un fallimento prima del commit atomico non corrompe né tronca il file esistente."""
+def test_replace_error_leaves_previous_file_intact(tmp_path: Path) -> None:
+    """A failure before the atomic commit neither corrupts nor truncates the existing file."""
     destination = tmp_path / "report.txt"
     destination.write_text(_ORIGINAL_CONTENT, encoding="utf-8")
     service = _service(tmp_path)
     service.begin_turn(write_allowed=True)
 
     with patch(
-        "assistente.file_service.os.replace",
+        "assistant.file_service.os.replace",
         side_effect=OSError("disco non disponibile"),
     ):
         result = service.write_text("report.txt", _UPDATED_CONTENT)
@@ -77,8 +77,8 @@ def test_errore_replace_lascia_intatto_il_file_precedente(tmp_path: Path) -> Non
     assert service.written_paths == []
 
 
-def test_path_prosa_observation_non_e_un_file(tmp_path: Path) -> None:
-    """I titoli del piano CoT non devono essere accettati come path."""
+def test_prose_observation_path_is_not_a_file(tmp_path: Path) -> None:
+    """CoT plan headings must not be accepted as paths."""
     service = _service(tmp_path)
     service.begin_turn(write_allowed=True)
     result = service.write_text("3.  Observation: Result.", "junk")
@@ -86,8 +86,8 @@ def test_path_prosa_observation_non_e_un_file(tmp_path: Path) -> None:
     assert not list(tmp_path.iterdir())
 
 
-def test_symlink_verso_esterno_viene_rifiutato(tmp_path: Path) -> None:
-    """Un componente symlink non può trasformare un path relativo in una fuga dal sandbox."""
+def test_symlink_to_outside_is_rejected(tmp_path: Path) -> None:
+    """A symlink component cannot turn a relative path into a sandbox escape."""
     workspace = tmp_path / "workspace"
     outside = tmp_path / "outside"
     workspace.mkdir()
@@ -102,8 +102,8 @@ def test_symlink_verso_esterno_viene_rifiutato(tmp_path: Path) -> None:
     assert not (outside / "escape.txt").exists()
 
 
-def test_create_only_non_sovrascrive_file_esistente(tmp_path: Path) -> None:
-    """La modalità usata dal fallback conserva sempre un file già materializzato."""
+def test_create_only_does_not_overwrite_existing_file(tmp_path: Path) -> None:
+    """The mode used by the fallback always keeps an already materialized file."""
     destination = tmp_path / "existing.txt"
     destination.write_text(_ORIGINAL_CONTENT, encoding="utf-8")
     service = _service(tmp_path)
@@ -116,8 +116,8 @@ def test_create_only_non_sovrascrive_file_esistente(tmp_path: Path) -> None:
     assert destination.read_text(encoding="utf-8") == _ORIGINAL_CONTENT
 
 
-def test_scrittura_identica_ripetuta_viene_bloccata(tmp_path: Path) -> None:
-    """L'anti-loop impedisce una seconda write identica ma consente contenuti corretti."""
+def test_repeated_identical_write_is_blocked(tmp_path: Path) -> None:
+    """Anti-loop blocks a second identical write but allows corrected content."""
     service = _service(tmp_path)
     service.begin_turn(write_allowed=True)
 
@@ -133,8 +133,8 @@ def test_scrittura_identica_ripetuta_viene_bloccata(tmp_path: Path) -> None:
     assert service.written_paths == ["loop.txt"]
 
 
-def test_stato_turno_e_isolato_tra_servizi(tmp_path: Path) -> None:
-    """Autorizzazione e tracking di una sessione non contaminano un'altra."""
+def test_turn_state_is_isolated_between_services(tmp_path: Path) -> None:
+    """One session's authorization and tracking do not contaminate another."""
     first_workspace = tmp_path / "first"
     second_workspace = tmp_path / "second"
     first_workspace.mkdir()
@@ -153,10 +153,10 @@ def test_stato_turno_e_isolato_tra_servizi(tmp_path: Path) -> None:
     assert second.written_paths == []
 
 
-def test_lettura_tronca_e_listing_ordina_cartelle_prima_dei_file(
+def test_read_truncates_and_listing_sorts_folders_first(
     tmp_path: Path,
 ) -> None:
-    """Read/list rispettano budget e restituiscono metadati deterministici."""
+    """Read/list respect the budget and return deterministic metadata."""
     character_limit = 10
     service = _service(tmp_path, max_read_characters=character_limit)
     service.begin_turn(write_allowed=True)
@@ -175,8 +175,8 @@ def test_lettura_tronca_e_listing_ordina_cartelle_prima_dei_file(
     ]
 
 
-def test_replace_text_match_unico(tmp_path: Path) -> None:
-    """Una occorrenza esatta viene sostituita e tracciata come write del turno."""
+def test_replace_text_single_match(tmp_path: Path) -> None:
+    """A single exact occurrence is replaced and tracked as a turn write."""
     destination = tmp_path / "app.txt"
     destination.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
     service = _service(tmp_path)
@@ -191,7 +191,7 @@ def test_replace_text_match_unico(tmp_path: Path) -> None:
 
 
 def test_replace_text_zero_match(tmp_path: Path) -> None:
-    """OLD assente non tocca il file e chiede di rileggere."""
+    """A missing OLD does not touch the file and asks for a re-read."""
     destination = tmp_path / "app.txt"
     destination.write_text("alpha\nbeta\n", encoding="utf-8")
     service = _service(tmp_path)
@@ -205,8 +205,8 @@ def test_replace_text_zero_match(tmp_path: Path) -> None:
     assert service.written_paths == []
 
 
-def test_replace_text_match_doppio(tmp_path: Path) -> None:
-    """Più occorrenze identiche sono ambigue e non modificano il disco."""
+def test_replace_text_double_match(tmp_path: Path) -> None:
+    """Multiple identical occurrences are ambiguous and do not modify the disk."""
     destination = tmp_path / "app.txt"
     destination.write_text("beta\nalpha\nbeta\n", encoding="utf-8")
     service = _service(tmp_path)
@@ -219,8 +219,8 @@ def test_replace_text_match_doppio(tmp_path: Path) -> None:
     assert destination.read_text(encoding="utf-8") == "beta\nalpha\nbeta\n"
 
 
-def test_replace_text_file_assente(tmp_path: Path) -> None:
-    """modifica_file non crea file mancanti."""
+def test_replace_text_missing_file(tmp_path: Path) -> None:
+    """modifica_file does not create missing files."""
     service = _service(tmp_path)
     service.begin_turn(write_allowed=True)
 
@@ -231,8 +231,8 @@ def test_replace_text_file_assente(tmp_path: Path) -> None:
     assert not (tmp_path / "manca.txt").exists()
 
 
-def test_replace_text_bloccato_senza_intent(tmp_path: Path) -> None:
-    """Deny-by-default vale anche per le patch."""
+def test_replace_text_blocked_without_intent(tmp_path: Path) -> None:
+    """Deny-by-default applies to patches too."""
     (tmp_path / "app.py").write_text("alpha\n", encoding="utf-8")
     service = _service(tmp_path)
 
@@ -243,8 +243,8 @@ def test_replace_text_bloccato_senza_intent(tmp_path: Path) -> None:
     assert (tmp_path / "app.py").read_text(encoding="utf-8") == "alpha\n"
 
 
-def test_replace_text_poi_fingerprint_identico(tmp_path: Path) -> None:
-    """Dopo una patch, una write dello stesso contenuto nello stesso turno è anti-loop."""
+def test_replace_text_then_identical_fingerprint(tmp_path: Path) -> None:
+    """After a patch, a write of the same content in the same turn is anti-loop."""
     destination = tmp_path / "app.txt"
     destination.write_text("alpha\n", encoding="utf-8")
     service = _service(tmp_path)
@@ -259,27 +259,27 @@ def test_replace_text_poi_fingerprint_identico(tmp_path: Path) -> None:
     assert destination.read_text(encoding="utf-8") == "beta\n"
 
 
-def test_documento_preesistente_non_si_sovrascrive(tmp_path: Path) -> None:
-    """Un .txt già nella cartella è una sorgente: niente overwrite, suggerisce un nome nuovo."""
+def test_preexisting_document_is_not_overwritten(tmp_path: Path) -> None:
+    """A .txt already in the folder is a source: no overwrite, a new name is suggested."""
     destination = tmp_path / "note.txt"
     destination.write_text("appunti originali\n", encoding="utf-8")
     service = _service(tmp_path)
     service.begin_turn(write_allowed=True)
 
-    rifiuto = service.write_text("note.txt", "prova\n")
-    assert rifiuto.succeeded is False
-    assert "note_2.txt" in str(rifiuto.error)
+    rejection = service.write_text("note.txt", "prova\n")
+    assert rejection.succeeded is False
+    assert "note_2.txt" in str(rejection.error)
     assert destination.read_text(encoding="utf-8") == "appunti originali\n"
 
-    # Un file creato dall'agente nella sessione resta riscrivibile, anche al turno dopo.
+    # A file created by the agent in the session stays rewritable, even on the next turn.
     assert service.write_text("sintesi.txt", "prima\n").succeeded
     service.begin_turn(write_allowed=True)
     assert service.write_text("sintesi.txt", "seconda\n").succeeded
     assert (tmp_path / "sintesi.txt").read_text(encoding="utf-8") == "seconda\n"
 
 
-def test_replace_text_ignora_troncamento_lettura(tmp_path: Path) -> None:
-    """La patch legge il file intero, anche oltre max_read_characters."""
+def test_replace_text_ignores_read_truncation(tmp_path: Path) -> None:
+    """The patch reads the whole file, even beyond max_read_characters."""
     character_limit = 10
     unique_tail = "UNIQUE_TAIL"
     destination = tmp_path / "long.txt"
@@ -295,16 +295,16 @@ def test_replace_text_ignora_troncamento_lettura(tmp_path: Path) -> None:
     assert "troncato" in read_result.content
 
 
-def test_normalize_slash_iniziale_workspace(tmp_path: Path) -> None:
-    """Slash iniziale su una cartella progetto resta nel sandbox; /tmp e /etc no."""
+def test_normalize_leading_slash_workspace(tmp_path: Path) -> None:
+    """A leading slash on a project folder stays in the sandbox; /tmp and /etc do not."""
     service = _service(tmp_path)
     assert service.normalize_file_path("/sito/index.html") == "sito/index.html"
     assert service.normalize_file_path("/tmp/fuori.txt") is None
     assert service.normalize_file_path("/etc/passwd") is None
 
 
-def test_create_directory_exist_ok_e_file_in_the_way(tmp_path: Path) -> None:
-    """mkdir è idempotente su una dir; rifiuta se il path è un file."""
+def test_create_directory_exist_ok_and_file_in_the_way(tmp_path: Path) -> None:
+    """mkdir is idempotent on a dir; it refuses if the path is a file."""
     service = _service(tmp_path)
     service.begin_turn(write_allowed=True)
     first = service.create_directory("notes/2026")
@@ -321,8 +321,8 @@ def test_create_directory_exist_ok_e_file_in_the_way(tmp_path: Path) -> None:
     assert service.written_paths == ["notes/2026"]
 
 
-def test_written_files_esclude_le_cartelle(tmp_path: Path) -> None:
-    """Una cartella è progresso del turno, non un file scritto da citare."""
+def test_written_files_excludes_folders(tmp_path: Path) -> None:
+    """A folder is turn progress, not a written file to cite."""
     service = _service(tmp_path)
     service.begin_turn(write_allowed=True)
     service.create_directory("notes")
@@ -332,8 +332,8 @@ def test_written_files_esclude_le_cartelle(tmp_path: Path) -> None:
     assert service.written_files == ["notes/oggi.txt"]
 
 
-def test_list_tree_salta_venv(tmp_path: Path) -> None:
-    """venv non compare nell'albero; i file utili sì."""
+def test_list_tree_skips_venv(tmp_path: Path) -> None:
+    """venv does not appear in the tree; useful files do."""
     (tmp_path / "notes").mkdir()
     (tmp_path / "notes" / "oggi.md").write_text("ok", encoding="utf-8")
     (tmp_path / "venv").mkdir()
@@ -347,8 +347,8 @@ def test_list_tree_salta_venv(tmp_path: Path) -> None:
     assert all("venv" not in name.split("/") for name in names)
 
 
-def test_find_files_glob_e_sottostringa(tmp_path: Path) -> None:
-    """Glob e frammento matchano il nome, non il contenuto."""
+def test_find_files_glob_and_substring(tmp_path: Path) -> None:
+    """Glob and fragment match the name, not the content."""
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "brief.md").write_text("segreto", encoding="utf-8")
     (tmp_path / "docs" / "altro.txt").write_text("brief nel body", encoding="utf-8")
@@ -364,8 +364,8 @@ def test_find_files_glob_e_sottostringa(tmp_path: Path) -> None:
     assert "docs/altro.txt" not in sub_names
 
 
-def test_create_directory_bloccata_senza_intent(tmp_path: Path) -> None:
-    """Deny-by-default vale anche per mkdir."""
+def test_create_directory_blocked_without_intent(tmp_path: Path) -> None:
+    """Deny-by-default applies to mkdir too."""
     service = _service(tmp_path)
     result = service.create_directory("notes")
     assert result.succeeded is False
@@ -373,9 +373,9 @@ def test_create_directory_bloccata_senza_intent(tmp_path: Path) -> None:
     assert not (tmp_path / "notes").exists()
 
 
-def test_deny_nasconde_segreti_da_elenchi_e_letture(tmp_path: Path) -> None:
-    """R5: la deny copre anche letture ed elenchi, con cartelle e radice inclusi."""
-    from assistente.permissions import WritePermissionRules
+def test_deny_hides_secrets_from_listings_and_reads(tmp_path: Path) -> None:
+    """R5: deny also covers reads and listings, folders and root included."""
+    from assistant.permissions import WritePermissionRules
 
     (tmp_path / "privato").mkdir()
     (tmp_path / "privato" / "chiavi.txt").write_text("s3cr3t", encoding="utf-8")
@@ -388,29 +388,29 @@ def test_deny_nasconde_segreti_da_elenchi_e_letture(tmp_path: Path) -> None:
     )
     service.begin_turn(True)
 
-    # Lettura negata con diagnostica dedicata e contenuto vuoto.
+    # Denied read with dedicated diagnostics and empty content.
     denied = service.read_document("privato/chiavi.txt")
     assert denied.succeeded is False
     assert denied.content == ""
     assert "Lettura non consentita" in str(denied.error)
 
-    # Elenchi: la cartella il cui contenuto è tutto negato sparisce.
-    nomi_root = [entry.relative_path for entry in service.list_directory(".").entries]
-    assert "privato" not in nomi_root
-    assert "docs" in nomi_root and "note.md" in nomi_root
-    nomi_tree = [entry.relative_path for entry in service.list_tree(".").entries]
-    assert not any(name.startswith("privato") for name in nomi_tree)
-    nomi_find = [entry.relative_path for entry in service.find_files("*.txt").entries]
-    assert "privato/chiavi.txt" not in nomi_find
-    assert "docs/a.txt" in nomi_find
+    # Listings: a folder whose content is all denied disappears.
+    root_names = [entry.relative_path for entry in service.list_directory(".").entries]
+    assert "privato" not in root_names
+    assert "docs" in root_names and "note.md" in root_names
+    tree_names = [entry.relative_path for entry in service.list_tree(".").entries]
+    assert not any(name.startswith("privato") for name in tree_names)
+    find_names = [entry.relative_path for entry in service.find_files("*.txt").entries]
+    assert "privato/chiavi.txt" not in find_names
+    assert "docs/a.txt" in find_names
 
-    # Scrittura comunque negata dalle stesse regole.
+    # Writes are still denied by the same rules.
     assert service.write_text("privato/x.txt", "a").succeeded is False
 
 
-def test_deny_cartella_blocca_elenco_e_figli(tmp_path: Path) -> None:
-    """Negare la cartella per nome la rende invisibile e non elencabile."""
-    from assistente.permissions import WritePermissionRules
+def test_deny_folder_blocks_listing_and_children(tmp_path: Path) -> None:
+    """Denying the folder by name makes it invisible and unlistable."""
+    from assistant.permissions import WritePermissionRules
 
     (tmp_path / "segreti").mkdir()
     (tmp_path / "segreti" / "k.txt").write_text("x", encoding="utf-8")
@@ -421,19 +421,19 @@ def test_deny_cartella_blocca_elenco_e_figli(tmp_path: Path) -> None:
     )
     service.begin_turn(True)
 
-    nomi_root = [entry.relative_path for entry in service.list_directory(".").entries]
-    assert "segreti" not in nomi_root
-    errore = service.list_directory("segreti")
-    assert errore.succeeded is False
-    assert "Lettura non consentita" in str(errore.error)
-    # Il figlio è illeggibile per antenato negato, senza alcun glob.
+    root_names = [entry.relative_path for entry in service.list_directory(".").entries]
+    assert "segreti" not in root_names
+    error = service.list_directory("segreti")
+    assert error.succeeded is False
+    assert "Lettura non consentita" in str(error.error)
+    # The child is unreadable because of a denied ancestor, with no glob at all.
     assert service.read_document("segreti/k.txt").succeeded is False
     assert service.read_document("aperto.txt").succeeded is True
 
 
-def test_env_radice_negato_dalle_regole_repo(tmp_path: Path) -> None:
-    """Le regole di default negano .env in radice e credentials.json in root (bug lstrip)."""
-    from assistente.permissions import load_write_permission_rules
+def test_root_env_denied_by_repo_rules(tmp_path: Path) -> None:
+    """The default rules deny .env at the root and credentials.json at the root (lstrip bug)."""
+    from assistant.permissions import load_write_permission_rules
 
     rules = load_write_permission_rules()
     if not rules.deny:
@@ -444,42 +444,42 @@ def test_env_radice_negato_dalle_regole_repo(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("alias", [".", "./", "attuale", "cartella corrente", "Root"])
-def test_alias_cartella_attuale_e_root(tmp_path: Path, alias: str) -> None:
-    """Regressione: «elencami i file nella cartella attuale» non trovava la root."""
+def test_current_folder_alias_is_root(tmp_path: Path, alias: str) -> None:
+    """Regression: «elencami i file nella cartella attuale» did not find the root."""
     assert _service(tmp_path).normalize_directory_path(alias) == ""
 
 
-def test_nome_della_cartella_stessa_e_root(tmp_path: Path) -> None:
-    """Il modello scrive «Documents» quando lanciato da ~/Documents."""
+def test_own_folder_name_is_root(tmp_path: Path) -> None:
+    """The model writes «Documents» when launched from ~/Documents."""
     workspace = tmp_path / "Documents"
     workspace.mkdir()
     assert _service(workspace).normalize_directory_path("Documents") == ""
 
 
-def test_sottocartella_reale_vince_sull_alias(tmp_path: Path) -> None:
+def test_real_subfolder_wins_over_alias(tmp_path: Path) -> None:
     (tmp_path / "attuale").mkdir()
     assert _service(tmp_path).normalize_directory_path("attuale") == "attuale"
 
 
 @pytest.mark.parametrize("query", ["articolo_1", "Articolo 1", "ARTICOLO-01"])
-def test_trova_file_tollera_separatori_e_zeri(tmp_path: Path, query: str) -> None:
-    """Regressione: «un file di nome articolo_1» non trovava Articolo_01.pages."""
+def test_find_file_tolerates_separators_and_zeros(tmp_path: Path, query: str) -> None:
+    """Regression: «un file di nome articolo_1» did not find Articolo_01.pages."""
     (tmp_path / "Articolo_01.pages").write_bytes(b"x")
     result = _service(tmp_path).find_files(query)
     assert [entry.relative_path for entry in result.entries] == ["Articolo_01.pages"]
 
 
-def test_trova_file_approssimato_solo_come_ripiego(tmp_path: Path) -> None:
-    """Se la sottostringa trova qualcosa, il confronto approssimato non allarga i risultati."""
+def test_find_file_approximate_only_as_fallback(tmp_path: Path) -> None:
+    """If the substring finds something, the approximate match does not widen the results."""
     (tmp_path / "note_1.txt").write_bytes(b"x")
     (tmp_path / "note1.txt").write_bytes(b"x")
-    nomi = [entry.relative_path for entry in _service(tmp_path).find_files("note_1").entries]
-    assert nomi == ["note_1.txt"]
+    names = [entry.relative_path for entry in _service(tmp_path).find_files("note_1").entries]
+    assert names == ["note_1.txt"]
     assert _service(tmp_path).find_files("articolo_2").entries == ()
 
 
 @pytest.mark.parametrize("query", ["articolo_1.txt", "articolo_1*"])
-def test_trova_file_ignora_estensione_e_glob_indovinati(tmp_path: Path, query: str) -> None:
+def test_find_file_ignores_guessed_extension_and_glob(tmp_path: Path, query: str) -> None:
     (tmp_path / "Articolo_01.pages").write_bytes(b"x")
-    nomi = [entry.relative_path for entry in _service(tmp_path).find_files(query).entries]
-    assert nomi == ["Articolo_01.pages"]
+    names = [entry.relative_path for entry in _service(tmp_path).find_files(query).entries]
+    assert names == ["Articolo_01.pages"]
